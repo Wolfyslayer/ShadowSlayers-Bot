@@ -1,0 +1,70 @@
+rules_version = '2';
+
+// ShadowSlayers - Legends of Elements
+// Production Firestore Security Rules Template (Firebase Spark)
+// Note: Trusted Node.js bot runtime uses Admin SDK; browser dashboard reads/writes only permitted admin paths.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isGuildStaff(guildId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/guilds/$(guildId)/staff/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/guilds/$(guildId)/staff/$(request.auth.uid)).data.rankLevel >= 3;
+    }
+
+    function isGuildAdmin(guildId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/guilds/$(guildId)/staff/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/guilds/$(guildId)/staff/$(request.auth.uid)).data.rankLevel >= 5;
+    }
+
+    match /guilds/{guildId} {
+      allow get: if isValidId(guildId) && isGuildStaff(guildId);
+      allow list: if false;
+      allow create, update, delete: if isValidId(guildId) && isGuildAdmin(guildId);
+
+      match /staff/{uid} {
+        allow get: if isValidId(uid) && (request.auth.uid == uid || isGuildAdmin(guildId));
+        allow list: if isGuildAdmin(guildId);
+        allow write: if isValidId(uid) && isGuildAdmin(guildId);
+      }
+
+      match /languages/{langCode} {
+        allow get, list: if isGuildStaff(guildId);
+        allow create, update: if isValidId(langCode) && isGuildAdmin(guildId);
+        allow delete: if false; // Languages are disabled, never deleted destructively
+      }
+
+      match /moderationCases/{caseId} {
+        allow get, list: if isGuildStaff(guildId);
+        allow create, update: if isValidId(caseId) && isGuildStaff(guildId);
+        allow delete: if false;
+      }
+
+      match /tickets/{ticketId} {
+        allow get: if isValidId(ticketId) && (isGuildStaff(guildId) || resource.data.creatorUid == request.auth.uid);
+        allow list: if isGuildStaff(guildId);
+        allow create: if isValidId(ticketId) && isSignedIn() && request.resource.data.creatorUid == request.auth.uid;
+        allow update: if isValidId(ticketId) && isGuildStaff(guildId);
+        allow delete: if false;
+      }
+
+      match /logs/{logId} {
+        allow get, list: if isGuildStaff(guildId);
+        allow create, update, delete: if false; // Written exclusively by trusted server runtime
+      }
+    }
+  }
+}

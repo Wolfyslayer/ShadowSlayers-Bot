@@ -1,0 +1,8 @@
+{
+  "name": "ShadowSlayers – Legends of Elements",
+  "description": "All-in-one Discord administration bot and dark fantasy guild management platform featuring dynamic multilingual channels, server discovery, moderation, AutoMod, tickets, recruitment, and clan progression.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
