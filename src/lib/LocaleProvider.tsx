@@ -15,11 +15,13 @@ const LocaleContext = createContext<LocaleContextValue>({
 
 export const LocaleProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
   const [locale, setLocaleState] = useState<DashboardLocale>(() => {
-    const stored = window.localStorage.getItem('shadowslayers-dashboard-locale');
+    const shared = window.localStorage.getItem('wolfyslayer:language');
+    const stored = shared || window.localStorage.getItem('shadowslayers-dashboard-locale');
     return stored === 'sv' ? 'sv' : 'en';
   });
 
   const setLocale = useCallback((next: DashboardLocale) => {
+    window.localStorage.setItem('wolfyslayer:language', next);
     window.localStorage.setItem('shadowslayers-dashboard-locale', next);
     setLocaleState(next);
   }, []);
