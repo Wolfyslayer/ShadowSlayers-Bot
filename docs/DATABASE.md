@@ -6,7 +6,7 @@ All application modules read and write through the `DatabaseAdapter` interface i
 - **Production Primary (`DATABASE_ADAPTER=firestore`)**: Firebase Cloud Firestore using server-side Admin SDK credentials. Missing credentials fail startup; production bot/API processes require Firestore rather than local JSON.
 - Supabase is not an implemented adapter and is not a supported deployment option.
 
-The static dashboard currently has no Firebase client SDK or Firebase Authentication integration. All browser reads/writes go through the trusted API because the existing OAuth/passcode session and Discord role checks cannot be reproduced safely with the current Firestore document schema and rules. Firestore rules deny access by default; Admin SDK code bypasses those rules and must continue to enforce API authorization.
+The static dashboard currently has no Firebase client SDK or Firebase Authentication integration. All browser reads and writes go through the trusted API because Discord OAuth sessions and permissions are enforced server-side. Firestore rules deny browser access; Admin SDK code bypasses those rules and must continue to enforce API authorization.
 
 ## 2. Core Collections (22 Structured Entities)
 All collections enforce server-level isolation via `guildId` and consistent ISO-8601 timestamps (`createdAt`, `updatedAt`):
@@ -48,6 +48,8 @@ All collections enforce server-level isolation via `guildId` and consistent ISO-
   - `guilds/{guildId}`: Stores core guild state (discovery mapping, modules, languages, members, role panels, onboarding config, automod rules, custom responses).
   - `guilds/{guildId}/logs/{logId}`: Subcollection storing structured audit log entries. Avoids Firestore 1MB document limit.
   - `guilds/{guildId}/scheduledTasks/{taskId}`: Subcollection storing pending and completed scheduler tasks.
+  - `bot_control_commands/{commandId}`: Signed API-to-bot jobs with queued/processing/completed/failed/cancelled state, expiry, actor attribution, and result/error.
+  - `shadowslayers_meta/bot_runtime`: Bot heartbeat, connection state, and connected guild IDs used to reject commands when the bot is stale or absent from a guild.
 - **Transactions & Concurrency**:
   - `saveGuild()` uses Firestore transactions to read existing scheduled tasks and merge them safely, preventing task regression (e.g., a completed or running task is never reverted to pending by a stale guild save).
   - An in-memory queue (`withGuildLock()`) ensures sequential execution per guild, preventing concurrent read-modify-write collisions.
@@ -58,9 +60,16 @@ All collections enforce server-level isolation via `guildId` and consistent ISO-
   - If `DATABASE_ADAPTER=firestore` is configured but credentials are missing, production startup throws an explicit fatal error (`Silent fallback to local JSON storage is forbidden in production`).
   - Setting `DATABASE_ADAPTER=supabase` throws an explicit startup error indicating that Supabase is an unimplemented future adapter.
 
-## 5. Runtime Ownership and Verification
+## 5. API-to-Bot Control Queue
+- The bot is the only process that owns a Discord Gateway. The API validates the authenticated user's guild and capability before signing and enqueueing a typed command in Firestore.
+- The bot polls the shared queue, transactionally claims one unexpired command for one of its connected guilds, verifies the HMAC using `BOT_CONTROL_SECRET`, executes the allowlisted operation, and signs the result before recording it. The API verifies that result signature before applying state changes.
+- API and bot must use the same Firestore project and the same server-only `BOT_CONTROL_SECRET` (at least 32 characters). Never expose it in the dashboard or a `VITE_` variable.
+- The API fails closed when Firestore is not shared, the bot heartbeat is stale, or the bot is not connected to the requested guild. If an HTTP timeout happens after a job is claimed, the Discord outcome is uncertain; check the guild before retrying.
+- Local JSON storage is not a cross-process queue. Use `DATABASE_ADAPTER=firestore` in both processes to test dashboard-to-bot actions.
+
+## 6. Runtime Ownership and Verification
 - Only the persistent bot process starts the scheduler. The standalone trusted API does not start a Discord Gateway or scheduler; its manual scheduler endpoint returns HTTP 503 rather than claiming work was executed.
-- Guild-scoped API access is bound to the session's guild ID (or the configured default guild for legacy admin sessions), in addition to the session capability check.
+- Guild-scoped API access is bound to a guild ID authorized by the Discord OAuth session, in addition to the session capability check. No `DISCORD_GUILD_ID` setting is required; the bot discovers its installed guilds at startup.
 - Schema migration runs when the Admin adapter initializes and reads a guild document. Automated migration/adapter tests use local fixtures and mocked Firestore interfaces; no live Firebase project was available for this phase.
 - Failed audit-log or task-status writes for unknown guilds/tasks throw explicit errors instead of being silently dropped.
 

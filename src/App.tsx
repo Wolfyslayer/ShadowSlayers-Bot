@@ -78,9 +78,15 @@ interface GuildStateResponse {
   };
 }
 
+interface GuildOption {
+  guildId: string;
+  name: string;
+}
+
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUserSession | null>(null);
+  const [guildOptions, setGuildOptions] = useState<GuildOption[]>([]);
   const [activeTab, setActiveTab] = useState('overview');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [data, setData] = useState<GuildStateResponse | null>(null);
@@ -106,11 +112,21 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, guildId]);
 
   useEffect(() => {
     void refreshState();
   }, [refreshState]);
+
+  useEffect(() => {
+    if (!token) {
+      setGuildOptions([]);
+      return;
+    }
+    apiRequest<{ guilds: GuildOption[] }>('/api/auth/guilds', { token })
+      .then(({ guilds }) => setGuildOptions(guilds))
+      .catch((err) => setLoadError(err instanceof Error ? err.message : 'Failed to load authorized servers'));
+  }, [token]);
 
   if (!token || !user) {
     return (
@@ -190,7 +206,7 @@ export default function App() {
 
         <div className="p-4 border-t border-slate-800/90 text-xs text-slate-400">
           <p className="font-medium text-slate-200 truncate">{user.username}</p>
-          <p className="text-amber-400 mt-0.5">{user.clanRank}</p>
+          <p className="text-amber-400 mt-0.5">{user.clanRank ?? 'Discord Server Administrator'}</p>
         </div>
       </aside>
 
@@ -213,7 +229,26 @@ export default function App() {
           </div>
 
           <div className="hidden md:flex items-center gap-4 text-xs text-slate-400 whitespace-nowrap">
-            <span>{data?.guild.guildName || 'ShadowSlayers – Legends of Elements'}</span>
+            {guildOptions.length > 1 ? (
+              <label className="flex items-center gap-2">
+                <span className="sr-only">Active Discord server</span>
+                <select
+                  aria-label="Active Discord server"
+                  value={guildId}
+                  onChange={(event) => {
+                    setUser((current) => current ? { ...current, guildId: event.target.value } : current);
+                    setData(null);
+                  }}
+                  className="max-w-64 rounded-md border border-slate-700 bg-[#171C28] px-2 py-1 text-slate-200"
+                >
+                  {guildOptions.map((guild) => (
+                    <option key={guild.guildId} value={guild.guildId}>{guild.name}</option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <span>{data?.guild.guildName || 'ShadowSlayers – Legends of Elements'}</span>
+            )}
             <span aria-hidden="true">·</span>
             <span className="font-mono-tabular">DB: {databaseAdapter}</span>
           </div>

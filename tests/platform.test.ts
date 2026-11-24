@@ -56,6 +56,12 @@ import {
   sessionCanAccessGuild,
 } from '../packages/permissions/src/oauth-authz.ts';
 import {
+  DISCORD_PERMISSION_FLAGS,
+  hasDiscordDashboardCapability,
+  hasDiscordPermission,
+  qualifiesAsDiscordGuildManager,
+} from '../packages/permissions/src/discord-guild-access.ts';
+import {
   LEGACY_CATEGORY_SPECS,
   LEGACY_CHANNEL_SPECS,
   LEGACY_ROLE_SPECS,
@@ -540,6 +546,71 @@ test('Discord OAuth2 authorization enforces default-deny guild membership and li
   assert.equal(authorizedCouncil.session?.clanRank, '🛡️ Shadow Council');
 });
 
+test('Discord guild access requires owner, Administrator, or Manage Server permissions', () => {
+  const base = { id: 'guild-1', name: 'Test Guild', owner: false, permissions: '0' };
+
+  assert.equal(qualifiesAsDiscordGuildManager({ ...base, owner: true }), true);
+  assert.equal(
+    qualifiesAsDiscordGuildManager({
+      ...base,
+      permissions: DISCORD_PERMISSION_FLAGS.administrator.toString(),
+    }),
+    true,
+  );
+  assert.equal(
+    qualifiesAsDiscordGuildManager({
+      ...base,
+      permissions: DISCORD_PERMISSION_FLAGS.manageGuild.toString(),
+    }),
+    true,
+  );
+  assert.equal(qualifiesAsDiscordGuildManager({ ...base, permissions: 'not-a-bitfield' }), false);
+  assert.equal(qualifiesAsDiscordGuildManager(base), false);
+  assert.equal(
+    hasDiscordPermission(
+      { ...base, permissions: DISCORD_PERMISSION_FLAGS.manageRoles.toString() },
+      DISCORD_PERMISSION_FLAGS.manageRoles,
+    ),
+    true,
+  );
+  assert.equal(
+    hasDiscordPermission(
+      { ...base, permissions: DISCORD_PERMISSION_FLAGS.manageGuild.toString() },
+      DISCORD_PERMISSION_FLAGS.manageRoles,
+    ),
+    false,
+  );
+  assert.equal(
+    hasDiscordDashboardCapability(
+      { ...base, permissions: DISCORD_PERMISSION_FLAGS.manageGuild.toString() },
+      'settings.manage',
+    ),
+    true,
+  );
+  assert.equal(
+    hasDiscordDashboardCapability(
+      { ...base, permissions: DISCORD_PERMISSION_FLAGS.manageGuild.toString() },
+      'members.edit',
+    ),
+    false,
+  );
+  assert.equal(
+    hasDiscordDashboardCapability(
+      { ...base, permissions: DISCORD_PERMISSION_FLAGS.kickMembers.toString() },
+      'moderation.execute',
+      'kick',
+    ),
+    false,
+  );
+  const guildAdmin = {
+    ...base,
+    permissions: (
+      DISCORD_PERMISSION_FLAGS.manageGuild | DISCORD_PERMISSION_FLAGS.kickMembers
+    ).toString(),
+  };
+  assert.equal(hasDiscordDashboardCapability(guildAdmin, 'moderation.execute', 'kick'), true);
+});
+
 test('Guild-bound admin sessions cannot access another guild database path', () => {
   assert.equal(sessionCanAccessGuild({ guildId: 'guild-one' }, 'guild-one', 'guild-one'), true);
   assert.equal(sessionCanAccessGuild({ guildId: 'guild-one' }, 'guild-two', 'guild-one'), false);
@@ -548,7 +619,7 @@ test('Guild-bound admin sessions cannot access another guild database path', () 
 
 test('Standalone bot rejects missing credentials instead of silently entering standby', async () => {
   const db = new LocalPersistentAdapter(path.join(os.tmpdir(), 'shadowslayers-unused-bot-test.json'), 'guild-test');
-  const bot = new ShadowSlayersBotClient(db, 'guild-test');
+  const bot = new ShadowSlayersBotClient(db);
   await assert.rejects(bot.start('', '123456789012345'), /DISCORD_BOT_TOKEN is required/);
   await assert.rejects(bot.start('token', ''), /DISCORD_CLIENT_ID is required/);
 });

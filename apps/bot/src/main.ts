@@ -14,13 +14,12 @@ function requireBotConfiguration(): ReturnType<typeof loadEnv> {
   if (!/^\d{15,22}$/.test(env.discordClientId)) {
     errors.push('DISCORD_CLIENT_ID must be a Discord application ID (15-22 digits).');
   }
-  if (!/^\d{15,22}$/.test(env.discordGuildId) || !process.env.DISCORD_GUILD_ID?.trim()) {
-    errors.push('DISCORD_GUILD_ID must be set to a Discord guild ID (15-22 digits).');
-  }
-
   const adapter = (process.env.DATABASE_ADAPTER || 'local').toLowerCase();
   if (adapter !== 'local' && adapter !== 'firestore') {
     errors.push('DATABASE_ADAPTER must be either "local" or "firestore".');
+  }
+  if (adapter === 'firestore' && env.botControlSecret.length < 32) {
+    errors.push('BOT_CONTROL_SECRET must contain at least 32 characters when DATABASE_ADAPTER=firestore.');
   }
 
   if (errors.length > 0) {
@@ -35,14 +34,14 @@ async function runBot(): Promise<void> {
   const db = createDatabaseAdapter(
     env.databaseAdapter,
     env.localDbPath,
-    env.discordGuildId,
+    undefined,
     env.nodeEnv,
     env.firebase,
   );
   const scheduler = new PersistentTaskScheduler(db, undefined, (err) => {
     console.error('[ShadowSlayers] Scheduler tick failed:', err);
   });
-  const bot = new ShadowSlayersBotClient(db, env.discordGuildId);
+  const bot = new ShadowSlayersBotClient(db, env.botControlSecret);
   let stopping = false;
 
   const shutdown = async (signal: string): Promise<void> => {

@@ -112,6 +112,7 @@ export function resolveAuthorizedDiscordOAuthSession(
       clanRank: resolvedRank,
       guildVerified: true,
       guildId: targetGuildId,
+      authorizedGuildIds: [targetGuildId],
       discordRoleIds,
       permissions: getCapabilitiesForRank(resolvedRank),
       lastVerifiedAt: nowIso,

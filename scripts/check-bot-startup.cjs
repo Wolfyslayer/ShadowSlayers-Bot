@@ -14,7 +14,6 @@ const result = spawnSync(process.execPath, [botBundlePath], {
     ...process.env,
     DISCORD_BOT_TOKEN: '',
     DISCORD_CLIENT_ID: '',
-    DISCORD_GUILD_ID: '',
   },
 });
 const output = `${result.stdout || ''}\n${result.stderr || ''}`;

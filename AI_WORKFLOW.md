@@ -21,7 +21,7 @@ Every contributor or automated coding tool modifying this repository **must** fo
 7. **Avoid Unnecessary Rewrites**
    - Preserve existing working Discord discovery mappings, language data, and permission boundaries. Never auto-delete roles, rename roles, or overwrite channel permissions.
 8. **Run Relevant Tests & Typechecks**
-   - Execute `npm run lint` (`tsc --noEmit`), `npm test`, `npm run build:bot`, `npm run build:dashboard`, and `npm run security:check` after changes.
+   - Execute `npm run lint` (`tsc --noEmit`), `npm test`, `npm run build:bot`, `npm run build:api`, `npm run build:dashboard`, and `npm run security:check` after changes.
    - Always distinguish **automated unit/integration tests** (run locally with mocked fixtures) from **live Discord Gateway / Cloud Firestore tests** (require live user-configured secrets).
 9. **Update Documentation & Roadmap**
    - Update checkboxes, completed/remaining/blocked counts, percentage complete, and test status in `ROADMAP.md` after every meaningful task. Never claim external functionality works without live verification.

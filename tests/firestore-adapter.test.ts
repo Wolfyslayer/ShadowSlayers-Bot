@@ -11,6 +11,7 @@ import {
 } from '../packages/database/src/firestore-adapter.ts';
 import { createDatabaseAdapter } from '../packages/database/src/adapter.ts';
 import { createInitialGuildSeed } from '../packages/database/src/seed.ts';
+import type { BotControlCommand } from '../packages/shared/src/bot-control.ts';
 import type { GuildState } from '../packages/shared/src/types.ts';
 
 function createInMemoryFirestoreClient(opts?: { failTransientCount?: number; fatalErrorCode?: string }): {
@@ -176,6 +177,79 @@ test('FirestoreDatabaseAdapter initializes meta + default guild, isolates guilds
   const betaAfter = await adapter.getGuild('guild-beta');
   assert.ok(alphaAfter?.logs.some((l) => l.id === 'log-alpha-custom'));
   assert.equal(betaAfter?.logs.some((l) => l.id === 'log-alpha-custom'), false);
+});
+
+test('Firestore bot-control queue atomically claims, completes, expires, and reports runtime status without a default guild', async () => {
+  const { client, store } = createInMemoryFirestoreClient();
+  const adapter = new FirestoreDatabaseAdapter({ client });
+  await adapter.init();
+
+  assert.deepEqual(await adapter.listGuildIds(), []);
+
+  const command: BotControlCommand<'moderation.execute'> = {
+    id: 'command-queue-001',
+    guildId: 'guild-queue-1',
+    operation: 'moderation.execute',
+    payload: {
+      action: 'timeout',
+      targetUserId: '123456789012345678',
+      reason: 'test',
+      durationMinutes: 5,
+      channelName: 'general',
+    },
+    actorUserId: '987654321098765432',
+    actorUsername: 'moderator',
+    signature: 'test-signature',
+    status: 'queued',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    expiresAt: '2026-01-01T00:01:00.000Z',
+  };
+  await adapter.enqueueBotCommand(command);
+
+  const firstClaim = await adapter.claimNextBotCommand(
+    ['guild-queue-1'],
+    'worker-one',
+    '2026-01-01T00:00:01.000Z',
+  );
+  assert.equal(firstClaim?.id, command.id);
+  assert.equal(firstClaim?.status, 'processing');
+  assert.equal(firstClaim?.workerId, 'worker-one');
+  assert.equal(
+    await adapter.claimNextBotCommand(['guild-queue-1'], 'worker-two', '2026-01-01T00:00:02.000Z'),
+    null,
+  );
+  assert.equal(
+    await adapter.completeBotCommand('guild-queue-1', command.id, 'worker-two', { ok: true }, 'signature', '2026-01-01T00:00:03.000Z'),
+    false,
+  );
+  assert.equal(
+    await adapter.completeBotCommand('guild-queue-1', command.id, 'worker-one', { ok: true }, 'signature', '2026-01-01T00:00:03.000Z'),
+    true,
+  );
+  assert.equal((await adapter.getBotCommand('guild-queue-1', command.id))?.status, 'completed');
+  assert.equal(await adapter.getBotCommand('different-guild', command.id), null);
+
+  const expired = { ...command, id: 'command-queue-expired', expiresAt: '2025-12-31T23:59:59.000Z' };
+  await adapter.enqueueBotCommand(expired);
+  assert.equal(
+    await adapter.claimNextBotCommand(['guild-queue-1'], 'worker-one', '2026-01-01T00:00:01.000Z'),
+    null,
+  );
+  assert.equal((await adapter.getBotCommand('guild-queue-1', expired.id))?.status, 'failed');
+
+  const status = {
+    connected: true,
+    mode: 'live_gateway' as const,
+    botTag: 'Bot#0001',
+    guildCount: 1,
+    guildIds: ['guild-queue-1'],
+    lastError: null,
+    startedAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:05.000Z',
+  };
+  await adapter.setBotRuntimeStatus(status);
+  assert.deepEqual(await adapter.getBotRuntimeStatus(), status);
+  assert.ok(store.has('shadowslayers_meta/bot_runtime'));
 });
 
 test('FirestoreDatabaseAdapter concurrency: parallel saveGuild and updateTaskStatus never regress completed tasks', async () => {

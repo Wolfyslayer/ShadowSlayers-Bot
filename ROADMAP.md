@@ -33,7 +33,7 @@
 - **Verification Gates**:
   - [x] Implemented (on branch `phase-0.1/legacy-compatibility-audit`)
   - [x] Automated Tests Passed (unit & mocked Discord API integration tests in `tests/platform.test.ts`)
-  - [ ] Live Discord Test Passed (Requires live `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, and `Wolfyslayer/shadow-slayers-discord-setup` access)
+  - [ ] Live Discord Test Passed (Requires live `DISCORD_BOT_TOKEN`, installation in a test guild, and `Wolfyslayer/shadow-slayers-discord-setup` access)
   - [ ] Reviewed & Approved
   - [ ] Deployed
 - **Implementation Tasks**:
@@ -51,7 +51,7 @@
 - **Verification Gates**:
   - [x] Implemented (directly on `main`)
   - [x] Automated Tests Passed (`tests/legacy-fixture.ts` + `tests/platform.test.ts` with mocked Discord Guilds)
-  - [ ] Live Discord Test Passed (Requires live `DISCORD_BOT_TOKEN` & `DISCORD_GUILD_ID` against real test server)
+  - [ ] Live Discord Test Passed (Requires live `DISCORD_BOT_TOKEN` against a real test server where the bot is installed)
   - [ ] Reviewed & Approved
   - [ ] Deployed
 - **Implementation Tasks**:
@@ -67,7 +67,7 @@
 - **Verification Gates**:
   - [x] Implemented (directly on `main`)
   - [x] Automated Tests Passed (21/21 automated unit & integration test suites passed in `tests/platform.test.ts` and `tests/firestore-adapter.test.ts`)
-  - [ ] Live Discord Test Passed (Requires live `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID` against live Discord guild; offline simulated guards verified)
+  - [ ] Live Discord Test Passed (Requires live `DISCORD_BOT_TOKEN` and `DISCORD_CLIENT_ID` in a live Discord guild; offline simulated guards verified)
   - [ ] Live Cloud Firestore Verified (Requires live `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` on Firebase Spark)
   - [ ] GitHub Remote Push Executed (Requires user GitHub remote repository configured; sandbox currently has no remote)
 - **Phase 0.3 Checklist (7/10 completed — 70.0%)**:
@@ -361,7 +361,7 @@
 - **Dependencies**: Phase 17.
 - **Implementation Tasks**:
   - [ ] Push repository to user's GitHub remote
-  - [ ] Configure `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, and Firestore Admin variables on Lunafy
+  - [ ] Configure `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, Firestore Admin variables, and `BOT_CONTROL_SECRET` on Lunafy
   - [ ] Deploy the trusted API separately with a stable `SESSION_SECRET` and no Discord Gateway
   - [ ] Provision external Firebase Spark project & deploy `database/firestore.rules.template`
   - [ ] Set `VITE_API_BASE_URL` variable in GitHub repo and enable GitHub Pages deployment

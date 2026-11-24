@@ -20,7 +20,7 @@
 | **Firestore Database Adapter (Phase 0.3)** | Production Firebase Admin SDK with guild isolation | Implemented | `tests/firestore-adapter.test.ts` (4/4 tests passed) |
 | **Security Hardening (Phase 0.3)** | Unranked null rank, XSS escape, dynamic OAuth2 revalidation | Implemented | `tests/platform.test.ts` + `walkthrough.md` (Passed) |
 | **Tickets, Recruitment, Clan, Community, Scheduler** | Full community & clan governance | Implemented | `server.ts`, `scheduler.ts`, `registry.ts`, dashboard views (Passed) |
-| **Live Discord Server End-to-End Test** | Run against real Discord server | Pending | Requires `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID` |
+| **Live Discord Server End-to-End Test** | Run against real Discord server | Pending | Requires `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, and bot installation in the test guild |
 | **Live Cloud Firestore End-to-End Test** | Run against live Firebase Spark project | Pending | Requires `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` |
 | **GitHub Remote Origin Push** | Push commit to GitHub `main` | Pending | Requires user-configured GitHub remote origin |
 

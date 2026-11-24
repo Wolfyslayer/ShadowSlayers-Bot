@@ -8,6 +8,7 @@ import type {
   GuildState,
   ScheduledTask,
 } from '../../shared/src/types.ts';
+import type { BotControlCommand, BotRuntimeSnapshot } from '../../shared/src/bot-control.ts';
 import { CURRENT_SCHEMA_VERSION, createInitialGuildSeed } from './seed.ts';
 import { migrateDatabaseRoot } from '../../../database/schema-migrations.ts';
 import { FirestoreDatabaseAdapter } from './firestore-adapter.ts';
@@ -23,6 +24,21 @@ export interface DatabaseAdapter {
   appendAuditLog(guildId: string, entry: AuditLogEntry): Promise<void>;
   getPendingTasks(nowIso: string): Promise<ScheduledTask[]>;
   updateTaskStatus(guildId: string, taskId: string, patch: Partial<ScheduledTask>): Promise<void>;
+  enqueueBotCommand(command: BotControlCommand): Promise<void>;
+  getBotCommand(guildId: string, commandId: string): Promise<BotControlCommand | null>;
+  claimNextBotCommand(guildIds: string[], workerId: string, nowIso: string): Promise<BotControlCommand | null>;
+  completeBotCommand(
+    guildId: string,
+    commandId: string,
+    workerId: string,
+    result: unknown,
+    resultSignature: string,
+    nowIso: string,
+  ): Promise<boolean>;
+  failBotCommand(guildId: string, commandId: string, workerId: string, error: string, nowIso: string): Promise<boolean>;
+  cancelQueuedBotCommand(guildId: string, commandId: string, error: string, nowIso: string): Promise<boolean>;
+  setBotRuntimeStatus(status: BotRuntimeSnapshot): Promise<void>;
+  getBotRuntimeStatus(): Promise<BotRuntimeSnapshot | null>;
   exportSnapshot(): Promise<DatabaseRoot>;
   close?(): Promise<void>;
 }
@@ -38,14 +54,12 @@ export class LocalPersistentAdapter implements DatabaseAdapter {
   private state: DatabaseRoot;
   private writeQueue: Promise<void> = Promise.resolve();
 
-  constructor(filePath = '.data/shadowslayers-db.json', defaultGuildId = 'shadowslayers-primary') {
+  constructor(filePath = '.data/shadowslayers-db.json', defaultGuildId?: string | null) {
     this.filePath = path.resolve(process.cwd(), filePath);
     this.state = {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       adminAuth: null,
-      guilds: {
-        [defaultGuildId]: createInitialGuildSeed(defaultGuildId),
-      },
+      guilds: defaultGuildId ? { [defaultGuildId]: createInitialGuildSeed(defaultGuildId) } : {},
     };
   }
 
@@ -162,6 +176,38 @@ export class LocalPersistentAdapter implements DatabaseAdapter {
     await this.flush();
   }
 
+  async enqueueBotCommand(): Promise<void> {
+    throw new Error('[Database] API-to-bot commands require DATABASE_ADAPTER=firestore shared by both processes.');
+  }
+
+  async getBotCommand(): Promise<BotControlCommand | null> {
+    throw new Error('[Database] API-to-bot commands require DATABASE_ADAPTER=firestore shared by both processes.');
+  }
+
+  async claimNextBotCommand(): Promise<BotControlCommand | null> {
+    throw new Error('[Database] API-to-bot commands require DATABASE_ADAPTER=firestore shared by both processes.');
+  }
+
+  async completeBotCommand(): Promise<boolean> {
+    throw new Error('[Database] API-to-bot commands require DATABASE_ADAPTER=firestore shared by both processes.');
+  }
+
+  async failBotCommand(): Promise<boolean> {
+    throw new Error('[Database] API-to-bot commands require DATABASE_ADAPTER=firestore shared by both processes.');
+  }
+
+  async cancelQueuedBotCommand(): Promise<boolean> {
+    throw new Error('[Database] API-to-bot commands require DATABASE_ADAPTER=firestore shared by both processes.');
+  }
+
+  async setBotRuntimeStatus(): Promise<void> {
+    throw new Error('[Database] Shared bot runtime status requires DATABASE_ADAPTER=firestore.');
+  }
+
+  async getBotRuntimeStatus(): Promise<BotRuntimeSnapshot | null> {
+    return null;
+  }
+
   async exportSnapshot(): Promise<DatabaseRoot> {
     return structuredClone(this.state);
   }
@@ -174,7 +220,7 @@ export class LocalPersistentAdapter implements DatabaseAdapter {
 export function createDatabaseAdapter(
   adapterType: 'local' | 'firestore' | 'supabase',
   localDbPath: string,
-  defaultGuildId: string,
+  defaultGuildId: string | undefined,
   nodeEnv = process.env.NODE_ENV || 'development',
   firebaseConfig: FirebaseAdminConfig | null = null,
 ): DatabaseAdapter {

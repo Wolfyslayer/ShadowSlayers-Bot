@@ -8,6 +8,7 @@ import type {
   GuildState,
   ScheduledTask,
 } from '../../shared/src/types.ts';
+import type { BotControlCommand, BotRuntimeSnapshot } from '../../shared/src/bot-control.ts';
 import { safeIdSchema } from '../../shared/src/validation.ts';
 import { migrateDatabaseRoot } from '../../../database/schema-migrations.ts';
 import type { DatabaseAdapter } from './adapter.ts';
@@ -111,7 +112,7 @@ function assertSafeDocId(id: string, label: string): string {
 
 export interface FirestoreAdapterOptions {
   firebaseConfig?: FirebaseAdminConfig | null;
-  defaultGuildId?: string;
+  defaultGuildId?: string | null;
   client?: FirestoreClientLike;
   maxRetries?: number;
   retryBaseDelayMs?: number;
@@ -127,7 +128,7 @@ export interface FirestoreAdapterOptions {
 export class FirestoreDatabaseAdapter implements DatabaseAdapter {
   readonly driverName = 'firestore' as const;
   private readonly firebaseConfig: FirebaseAdminConfig | null;
-  private readonly defaultGuildId: string;
+  private readonly defaultGuildId: string | null;
   private readonly maxRetries: number;
   private readonly retryBaseDelayMs: number;
   private client: FirestoreClientLike | null;
@@ -137,7 +138,7 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
 
   constructor(options: FirestoreAdapterOptions) {
     this.firebaseConfig = options.firebaseConfig ?? null;
-    this.defaultGuildId = options.defaultGuildId ?? 'shadowslayers-primary';
+    this.defaultGuildId = options.defaultGuildId ?? null;
     this.client = options.client ?? null;
     this.maxRetries = options.maxRetries ?? 3;
     this.retryBaseDelayMs = options.retryBaseDelayMs ?? 120;
@@ -233,7 +234,7 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
   }
 
   async init(): Promise<void> {
-    const guildId = assertSafeDocId(this.defaultGuildId, 'defaultGuildId');
+    const guildId = this.defaultGuildId ? assertSafeDocId(this.defaultGuildId, 'defaultGuildId') : null;
     const db = this.getClient();
 
     await this.withRetry('init', async () => {
@@ -242,8 +243,8 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
 
       await db.runTransaction(async (tx) => {
         const metaSnap = await tx.get(metaRef);
-        const defaultGuildRef = guildCol.doc(guildId);
-        const defaultGuildSnap = await tx.get(defaultGuildRef);
+        const defaultGuildRef = guildId ? guildCol.doc(guildId) : null;
+        const defaultGuildSnap = defaultGuildRef ? await tx.get(defaultGuildRef) : null;
 
         if (!metaSnap.exists) {
           tx.set(metaRef, {
@@ -253,7 +254,7 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
           });
         }
 
-        if (!defaultGuildSnap.exists) {
+        if (guildId && defaultGuildRef && !defaultGuildSnap?.exists) {
           const seed = createInitialGuildSeed(guildId);
           await this.writeGuildInsideTransaction(tx, defaultGuildRef, seed, undefined, true);
         }
@@ -543,6 +544,164 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
           );
         });
       });
+    });
+  }
+
+  private getBotCommandCollection(guildId: string): FirestoreCollectionRefLike {
+    assertSafeDocId(guildId, 'guildId');
+    return this.getClient().collection('bot_control_commands');
+  }
+
+  async enqueueBotCommand(command: BotControlCommand): Promise<void> {
+    const safeId = assertSafeDocId(command.id, 'botCommandId');
+    const collection = this.getBotCommandCollection(command.guildId);
+    await this.withRetry('enqueueBotCommand', async () => {
+      await collection.doc(safeId).set(stripUndefined(command) as unknown as Record<string, unknown>);
+    });
+  }
+
+  async getBotCommand(guildId: string, commandId: string): Promise<BotControlCommand | null> {
+    const safeId = assertSafeDocId(commandId, 'botCommandId');
+    const collection = this.getBotCommandCollection(guildId);
+    return this.withRetry('getBotCommand', async () => {
+      const snap = await collection.doc(safeId).get();
+      if (!snap.exists) return null;
+      const command = snap.data() as unknown as BotControlCommand;
+      return command.guildId === guildId ? structuredClone(command) : null;
+    });
+  }
+
+  async claimNextBotCommand(
+    guildIds: string[],
+    workerId: string,
+    nowIso: string,
+  ): Promise<BotControlCommand | null> {
+    const connectedGuildIds = new Set(guildIds.map((id) => assertSafeDocId(id, 'guildId')));
+    if (connectedGuildIds.size === 0) return null;
+    const collection = this.getClient().collection('bot_control_commands');
+    const now = new Date(nowIso);
+    if (Number.isNaN(now.getTime())) throw new Error('[Firestore] Invalid bot command claim timestamp.');
+
+    return this.withRetry('claimNextBotCommand', async () => {
+      const queued = await collection.where('status', '==', 'queued').limit(50).get();
+      for (const candidate of queued.docs) {
+        const ref = collection.doc(assertSafeDocId(candidate.id, 'botCommandId'));
+        const claimed = await this.getClient().runTransaction(async (tx) => {
+          const currentSnap = await tx.get(ref);
+          if (!currentSnap.exists) return null;
+          const current = currentSnap.data() as unknown as BotControlCommand;
+          if (current.status !== 'queued') return null;
+          const expiresAt = Date.parse(current.expiresAt);
+          if (!Number.isFinite(expiresAt) || expiresAt <= now.getTime()) {
+            tx.set(
+              ref,
+              {
+                status: 'failed',
+                error: 'Bot command has an invalid or expired deadline.',
+                completedAt: now.toISOString(),
+              },
+              { merge: true },
+            );
+            return null;
+          }
+          if (!connectedGuildIds.has(current.guildId)) return null;
+          const next: BotControlCommand = {
+            ...current,
+            status: 'processing',
+            workerId,
+            claimedAt: now.toISOString(),
+          };
+          tx.set(ref, stripUndefined(next) as unknown as Record<string, unknown>);
+          return next;
+        });
+        if (claimed) return claimed;
+      }
+      return null;
+    });
+  }
+
+  private async transitionBotCommand(
+    operation: string,
+    guildId: string,
+    commandId: string,
+    workerId: string | null,
+    expectedStatus: BotControlCommand['status'],
+    patch: Record<string, unknown>,
+  ): Promise<boolean> {
+    const collection = this.getBotCommandCollection(guildId);
+    const ref = collection.doc(assertSafeDocId(commandId, 'botCommandId'));
+    return this.withRetry(operation, async () =>
+      this.getClient().runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists) return false;
+        const current = snap.data() as Record<string, unknown> | undefined;
+        if (current?.status !== expectedStatus) return false;
+        if (current.guildId !== guildId) return false;
+        if (workerId && current.workerId !== workerId) return false;
+        tx.set(ref, stripUndefined(patch) as Record<string, unknown>, { merge: true });
+        return true;
+      }),
+    );
+  }
+
+  async completeBotCommand(
+    guildId: string,
+    commandId: string,
+    workerId: string,
+    result: unknown,
+    resultSignature: string,
+    nowIso: string,
+  ): Promise<boolean> {
+    return this.transitionBotCommand('completeBotCommand', guildId, commandId, workerId, 'processing', {
+      status: 'completed',
+      result,
+      resultSignature,
+      completedAt: nowIso,
+    });
+  }
+
+  async failBotCommand(
+    guildId: string,
+    commandId: string,
+    workerId: string,
+    error: string,
+    nowIso: string,
+  ): Promise<boolean> {
+    return this.transitionBotCommand('failBotCommand', guildId, commandId, workerId, 'processing', {
+      status: 'failed',
+      error,
+      completedAt: nowIso,
+    });
+  }
+
+  async cancelQueuedBotCommand(
+    guildId: string,
+    commandId: string,
+    error: string,
+    nowIso: string,
+  ): Promise<boolean> {
+    return this.transitionBotCommand('cancelQueuedBotCommand', guildId, commandId, null, 'queued', {
+      status: 'cancelled',
+      error,
+      completedAt: nowIso,
+    });
+  }
+
+  async setBotRuntimeStatus(status: BotRuntimeSnapshot): Promise<void> {
+    const db = this.getClient();
+    await this.withRetry('setBotRuntimeStatus', async () => {
+      await db
+        .collection('shadowslayers_meta')
+        .doc('bot_runtime')
+        .set(stripUndefined(status) as unknown as Record<string, unknown>);
+    });
+  }
+
+  async getBotRuntimeStatus(): Promise<BotRuntimeSnapshot | null> {
+    const db = this.getClient();
+    return this.withRetry('getBotRuntimeStatus', async () => {
+      const snap = await db.collection('shadowslayers_meta').doc('bot_runtime').get();
+      return snap.exists ? (structuredClone(snap.data()) as unknown as BotRuntimeSnapshot) : null;
     });
   }
 

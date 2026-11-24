@@ -52,7 +52,7 @@
 ## 4. Verification Status Summary
 
 - **Automated Verification (Unit + Mocked Discord API):** Verified in `tests/platform.test.ts` and `tests/legacy-fixture.ts` (all 10 role combination access cases, 5-step onboarding, misplacement/type/permission-diff discovery, `👑 Shadow King` exclusion, partial failure retry, idempotency, command parity, and schema v3 migration).
-- **Live Discord Server Verification:** **Not yet executed** in this environment (requires live `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, and a real test Discord server).
+- **Live Discord Server Verification:** **Not yet executed** in this environment (requires live `DISCORD_BOT_TOKEN` and a real test Discord server where the bot is installed).
 
 ---
 
@@ -65,6 +65,6 @@
 | **Firestore Architecture** | Firestore not implemented with real Admin SDK; danger of silent fallback to local JSON in production | Implemented `FirestoreDatabaseAdapter` (`firebase-admin`) with guild isolation (`guilds/{id}`), subcollections (`logs`, `scheduledTasks`), transactions, per-guild async locks, and explicit credential aborts | **Verified** (InMemory & Mocked Firestore tests pass) |
 | **Offline False-Success** | Bot or dashboard claiming state changes when Discord Gateway offline or rejecting operations | Required live Discord connection before marking rules published, panels published, language channels created, onboarding roles assigned, or moderation penalties active; preserved prior DB state on failure | **Verified** (Offline rejection tests pass) |
 | **Security & Role Escalation** | Defaulting unranked members to `🌱 Recruit`; reflected XSS in 403 error body; stale OAuth2 sessions after demotion; unvalidated `:guildId` | Assigned `null` clanRank for unranked users (0 permissions); added `escapeHtml` in `/auth/callback`; added dynamic `revalidateDiscordOAuthSession`; added Express route param guard `safeIdSchema` | **Verified** (`walkthrough.md` PoC tests pass) |
-| **Live Discord Server Test** | Requires real Discord API credentials and live bot gateway connection | Pending user-provided `DISCORD_BOT_TOKEN` & `DISCORD_GUILD_ID` | **Blocked in Sandbox** |
+| **Live Discord Server Test** | Requires real Discord API credentials and live bot gateway connection | Pending user-provided `DISCORD_BOT_TOKEN` and bot installation in a test guild | **Blocked in Sandbox** |
 | **Live Cloud Firestore Test** | Requires real Firebase project and service account private key | Pending user-provided Firebase credentials | **Blocked in Sandbox** |
 

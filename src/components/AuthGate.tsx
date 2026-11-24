@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { KeyRound, Shield, Lock } from 'lucide-react';
+import { Shield } from 'lucide-react';
 import type { AuthUserSession } from '../../packages/shared/src/types';
 import { apiRequest } from '../lib/api';
 import bannerUrl from '../assets/images/banner_sanctum_1795519524069.jpg';
@@ -7,9 +7,6 @@ import guildCrestUrl from '../assets/images/crest_shadowslayers_1795519523634.jp
 
 interface AuthStatus {
   discordOAuthConfigured: boolean;
-  envPasscodeConfigured: boolean;
-  adminClaimed: boolean;
-  claimedUsername: string | null;
 }
 
 interface AuthGateProps {
@@ -18,11 +15,7 @@ interface AuthGateProps {
 
 export const AuthGate: React.FC<AuthGateProps> = ({ onAuthenticated }) => {
   const [status, setStatus] = useState<AuthStatus | null>(null);
-  const [username, setUsername] = useState('AldricShadow');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     apiRequest<AuthStatus>('/api/auth/status')
@@ -77,48 +70,6 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onAuthenticated }) => {
     }
   };
 
-  const handleClaimAdmin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    if (password.length < 8) {
-      setError('Passcode must be at least 8 characters.');
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError('Passcodes do not match.');
-      return;
-    }
-    setLoading(true);
-    try {
-      const res = await apiRequest<{ token: string; user: AuthUserSession }>('/api/auth/claim-admin', {
-        method: 'POST',
-        body: { username, password },
-      });
-      onAuthenticated(res.token, res.user);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to claim admin access');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setLoading(true);
-    try {
-      const res = await apiRequest<{ token: string; user: AuthUserSession }>('/api/auth/login', {
-        method: 'POST',
-        body: { password },
-      });
-      onAuthenticated(res.token, res.user);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid credentials');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <div className="min-h-screen bg-[#0B0D12] text-slate-100 flex items-center justify-center p-4 sm:p-8">
       <div className="w-full max-w-4xl grid grid-cols-1 lg:grid-cols-2 border border-slate-800 bg-[#121620] rounded-xl overflow-hidden">
@@ -169,13 +120,9 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onAuthenticated }) => {
               <Shield className="w-4 h-4" />
               <span>Inner Sanctum Authentication</span>
             </div>
-            <h3 className="font-display text-xl font-semibold text-slate-100">
-              {status && !status.adminClaimed ? 'Claim Initial Administrator Access' : 'Sign In to Dashboard'}
-            </h3>
+            <h3 className="font-display text-xl font-semibold text-slate-100">Sign In to Dashboard</h3>
             <p className="text-sm text-slate-400 mt-1">
-              {status && !status.adminClaimed
-                ? 'Set the initial Shadow King passcode for this workspace, or authenticate via Discord OAuth2 once configured.'
-                : 'Authenticate with your verified administrator passcode or Discord OAuth2.'}
+              Sign in with Discord to access servers where you are the owner or have Administrator or Manage Server permissions.
             </p>
           </div>
 
@@ -187,89 +134,16 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onAuthenticated }) => {
 
           {!status ? (
             <div className="py-8 text-sm text-slate-400">Checking server authentication state...</div>
-          ) : !status.adminClaimed ? (
-            <form onSubmit={handleClaimAdmin} className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1.5">Administrator Display Name</label>
-                <input
-                  type="text"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  required
-                  className="w-full px-3.5 py-2.5 rounded-lg bg-[#0B0D12] border border-slate-800 text-sm text-slate-100 focus:outline-none focus:border-amber-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1.5">Passcode (min 8 characters)</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  minLength={8}
-                  placeholder="Enter strong passcode"
-                  className="w-full px-3.5 py-2.5 rounded-lg bg-[#0B0D12] border border-slate-800 text-sm text-slate-100 focus:outline-none focus:border-amber-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1.5">Confirm Passcode</label>
-                <input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  required
-                  minLength={8}
-                  placeholder="Repeat passcode"
-                  className="w-full px-3.5 py-2.5 rounded-lg bg-[#0B0D12] border border-slate-800 text-sm text-slate-100 focus:outline-none focus:border-amber-500"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-2.5 px-4 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-slate-950 font-semibold text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <KeyRound className="w-4 h-4" />
-                <span>{loading ? 'Provisioning Access...' : 'Claim Shadow King Access'}</span>
-              </button>
-            </form>
           ) : (
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                  Administrator Passcode {status.claimedUsername ? `(${status.claimedUsername})` : ''}
-                </label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  placeholder="Enter administrator passcode"
-                  className="w-full px-3.5 py-2.5 rounded-lg bg-[#0B0D12] border border-slate-800 text-sm text-slate-100 focus:outline-none focus:border-amber-500"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-2.5 px-4 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-slate-950 font-semibold text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <Lock className="w-4 h-4" />
-                <span>{loading ? 'Verifying...' : 'Sign In'}</span>
-              </button>
-            </form>
-          )}
-
-          <div className="mt-6 pt-6 border-t border-slate-800">
             <button
               type="button"
               onClick={handleDiscordOAuth}
               disabled={!status?.discordOAuthConfigured}
               className="w-full py-2.5 px-4 rounded-lg border border-slate-700 bg-[#171C28] hover:bg-[#1E2535] disabled:opacity-50 disabled:cursor-not-allowed text-slate-200 text-sm font-medium transition-colors cursor-pointer"
             >
-              {status?.discordOAuthConfigured
-                ? 'Continue with Discord OAuth2'
-                : 'Discord OAuth2 (Configure DISCORD_CLIENT_ID / SECRET to enable)'}
+              {status.discordOAuthConfigured ? 'Continue with Discord' : 'Discord sign-in is not configured'}
             </button>
-          </div>
+          )}
         </div>
       </div>
     </div>

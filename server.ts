@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { loadEnv } from './packages/config/src/env.ts';
 import { createDatabaseAdapter } from './packages/database/src/adapter.ts';
+import { createInitialGuildSeed } from './packages/database/src/seed.ts';
 import {
   calculateCompleteness,
   createLanguageDraft,
@@ -10,17 +11,31 @@ import {
 import {
   canActOnTargetRank,
   canAssignClanRank,
-  getCapabilitiesForRank,
-  hasCapability,
   mergeIndependentLanguageRoles,
   type PermissionCapability,
 } from './packages/permissions/src/hierarchy.ts';
 import {
-  resolveAuthorizedDiscordOAuthSession,
-  revalidateDiscordOAuthSession,
-  sessionCanAccessGuild,
-} from './packages/permissions/src/oauth-authz.ts';
-import type { AuthUserSession, GuildState, LogCategory } from './packages/shared/src/types.ts';
+  hasDiscordDashboardCapability,
+  qualifiesAsDiscordGuildManager,
+  type DiscordOAuthGuildAccess,
+} from './packages/permissions/src/discord-guild-access.ts';
+import type {
+  AuthUserSession,
+  AuthorizedDiscordGuild,
+  GuildState,
+  LogCategory,
+} from './packages/shared/src/types.ts';
+import type {
+  BotControlCommand,
+  BotControlOperation,
+  BotControlPayloadMap,
+  BotControlResultMap,
+  BotRuntimeSnapshot,
+} from './packages/shared/src/bot-control.ts';
+import {
+  signBotControlCommand,
+  verifyBotControlResult,
+} from './packages/shared/src/bot-control-signature.ts';
 import {
   appealReviewSchema,
   automodUpdateSchema,
@@ -40,8 +55,7 @@ import {
   ticketMessageSchema,
   translationUpdateSchema,
 } from './packages/shared/src/validation.ts';
-import { ShadowSlayersBotClient } from './apps/bot/src/index.ts';
-import { SLASH_COMMANDS, executeSlashCommand } from './apps/bot/src/commands/registry.ts';
+import { SLASH_COMMANDS } from './apps/bot/src/commands/registry.ts';
 import { RuleBasedAutoModEngine } from './apps/bot/src/services/automod.ts';
 import {
   applyRulesVerificationReaction,
@@ -55,8 +69,9 @@ interface AuthenticatedRequest extends Request {
 
 const env = loadEnv();
 const SESSION_KEY = env.sessionSecret || crypto.randomBytes(32).toString('hex');
-const oauthStates = new Map<string, { createdAt: number }>();
+const oauthStates = new Map<string, { createdAt: number; targetOrigin: string }>();
 const rateLimitBuckets = new Map<string, number[]>();
+const discordAccessCache = new Map<string, { expiresAt: number; access: DiscordOAuthGuildAccess | null }>();
 
 function signSessionToken(payload: AuthUserSession): string {
   const data = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
@@ -76,22 +91,12 @@ function verifySessionToken(token: string): AuthUserSession | null {
   }
   try {
     const parsed = JSON.parse(Buffer.from(data, 'base64url').toString('utf8')) as AuthUserSession;
+    if (parsed.provider !== 'discord_oauth' || !Array.isArray(parsed.authorizedGuildIds)) return null;
     if (new Date(parsed.expiresAt).getTime() <= Date.now()) return null;
     return parsed;
   } catch {
     return null;
   }
-}
-
-function hashPasswordScrypt(password: string, salt: string): string {
-  return crypto.scryptSync(password, salt, 64).toString('hex');
-}
-
-function verifyPasswordScrypt(password: string, salt: string, storedHex: string): boolean {
-  const derived = crypto.scryptSync(password, salt, 64);
-  const stored = Buffer.from(storedHex, 'hex');
-  if (derived.length !== stored.length) return false;
-  return crypto.timingSafeEqual(derived, stored);
 }
 
 function rateLimit(maxRequests: number, windowMs: number) {
@@ -116,6 +121,56 @@ function escapeHtml(raw: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+async function fetchLiveDiscordGuildAccess(
+  guildId: string,
+  userId: string,
+): Promise<DiscordOAuthGuildAccess | null> {
+  if (!env.discordBotToken) {
+    throw new Error('DISCORD_BOT_TOKEN is required to verify guild access.');
+  }
+  const cacheKey = `${guildId}:${userId}`;
+  const cached = discordAccessCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.access;
+
+  const headers = { Authorization: `Bot ${env.discordBotToken}` };
+  const base = `https://discord.com/api/v10/guilds/${guildId}`;
+  const [guildResp, memberResp, rolesResp] = await Promise.all([
+    fetch(base, { headers }),
+    fetch(`${base}/members/${userId}`, { headers }),
+    fetch(`${base}/roles`, { headers }),
+  ]);
+  if ([guildResp.status, memberResp.status, rolesResp.status].includes(404)) {
+    discordAccessCache.set(cacheKey, { expiresAt: Date.now() + 15_000, access: null });
+    return null;
+  }
+  if (!guildResp.ok || !memberResp.ok || !rolesResp.ok) {
+    throw new Error('Discord rejected live guild permission verification.');
+  }
+
+  const [guild, member, roles] = await Promise.all([
+    guildResp.json() as Promise<{ id: string; name: string; owner_id: string }>,
+    memberResp.json() as Promise<{ roles: string[] }>,
+    rolesResp.json() as Promise<Array<{ id: string; permissions: string }>>,
+  ]);
+  const roleIds = new Set([guildId, ...member.roles]);
+  let permissions = 0n;
+  for (const role of roles) {
+    if (!roleIds.has(role.id)) continue;
+    if (!/^\d+$/.test(role.permissions)) {
+      throw new Error('Discord returned an invalid guild role permission bitfield.');
+    }
+    permissions |= BigInt(role.permissions);
+  }
+  const access = {
+    id: guildId,
+    name: guild.name,
+    owner: guild.owner_id === userId,
+    permissions: permissions.toString(),
+  };
+  discordAccessCache.set(cacheKey, { expiresAt: Date.now() + 15_000, access });
+  return access;
 }
 
 async function bootstrap() {
@@ -143,26 +198,179 @@ async function bootstrap() {
   if (env.nodeEnv === 'production' && env.sessionSecret.length < 32) {
     throw new Error('SESSION_SECRET must contain at least 32 characters in production.');
   }
-  if (env.nodeEnv === 'production' && !env.adminPasscode.trim()) {
-    throw new Error('ADMIN_PASSCODE must be configured in production; first-run claiming is disabled.');
-  }
   if (env.nodeEnv === 'production' && env.databaseAdapter !== 'firestore') {
     throw new Error('Production API deployments require DATABASE_ADAPTER=firestore.');
   }
-  if (env.nodeEnv === 'production' && !/^\d{15,22}$/.test(env.discordGuildId)) {
-    throw new Error('DISCORD_GUILD_ID must be configured as a numeric guild ID in production.');
+  if (env.databaseAdapter === 'firestore' && env.botControlSecret.length < 32) {
+    throw new Error('BOT_CONTROL_SECRET must contain at least 32 characters when DATABASE_ADAPTER=firestore.');
   }
   const db = createDatabaseAdapter(
     env.databaseAdapter,
     env.localDbPath,
-    env.discordGuildId,
+    undefined,
     env.nodeEnv,
     env.firebase,
   );
   await db.init();
 
-  // The trusted API is deployed separately; only the standalone bot owns a Discord Gateway.
-  const botClient = new ShadowSlayersBotClient(db, env.discordGuildId);
+  const botStatusUnavailable: BotRuntimeSnapshot = {
+    connected: false,
+    mode: 'standby_no_token',
+    botTag: null,
+    guildCount: 0,
+    guildIds: [],
+    lastError: 'The bot has not published a runtime heartbeat.',
+    startedAt: null,
+    updatedAt: new Date(0).toISOString(),
+  };
+  const getBotRuntimeStatus = async (): Promise<BotRuntimeSnapshot> => {
+    let stored: BotRuntimeSnapshot | null;
+    try {
+      stored = await db.getBotRuntimeStatus();
+    } catch (err) {
+      return {
+        ...botStatusUnavailable,
+        lastError: `Could not read bot runtime status: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    if (!stored) return botStatusUnavailable;
+    const updatedAtMs = Date.parse(stored.updatedAt);
+    if (!Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs > 30_000 || updatedAtMs > Date.now() + 30_000) {
+      return {
+        ...stored,
+        connected: false,
+        lastError: 'The bot runtime heartbeat is stale.',
+      };
+    }
+    return stored;
+  };
+  const getPublicBotRuntimeStatus = async () => {
+    const { connected, mode, botTag, guildCount, lastError, startedAt, updatedAt } =
+      await getBotRuntimeStatus();
+    return { connected, mode, botTag, guildCount, lastError, startedAt, updatedAt };
+  };
+  const dispatchBotCommand = async <T extends BotControlOperation>(
+    guildId: string,
+    actor: Pick<AuthUserSession, 'userId' | 'username'>,
+    operation: T,
+    payload: BotControlPayloadMap[T],
+  ): Promise<
+    | { ok: true; result: BotControlResultMap[T] }
+    | { ok: false; status: number; error: string }
+  > => {
+    if (db.driverName !== 'firestore') {
+      return {
+        ok: false,
+        status: 503,
+        error: 'API-to-bot commands require DATABASE_ADAPTER=firestore on both the API and bot processes.',
+      };
+    }
+    if (env.botControlSecret.length < 32) {
+      return {
+        ok: false,
+        status: 503,
+        error: 'BOT_CONTROL_SECRET must contain at least 32 characters on the API and bot processes.',
+      };
+    }
+
+    let runtime: BotRuntimeSnapshot;
+    try {
+      runtime = await getBotRuntimeStatus();
+    } catch (err) {
+      return {
+        ok: false,
+        status: 503,
+        error: `Could not read bot runtime status: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    if (!runtime.connected || !runtime.guildIds.includes(guildId)) {
+      return {
+        ok: false,
+        status: 503,
+        error: `The bot is offline or not connected to Discord guild ${guildId}.`,
+      };
+    }
+
+    const now = new Date();
+    const commandId = `${now.getTime().toString(36).padStart(10, '0')}${crypto.randomUUID().replace(/-/g, '')}`;
+    const command = {
+      id: commandId,
+      guildId,
+      operation,
+      payload,
+      actorUserId: actor.userId,
+      actorUsername: actor.username,
+      signature: '',
+      status: 'queued',
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + 120_000).toISOString(),
+    } as BotControlCommand<T>;
+    command.signature = signBotControlCommand(command, env.botControlSecret);
+    try {
+      await db.enqueueBotCommand(command);
+    } catch (err) {
+      return {
+        ok: false,
+        status: 503,
+        error: `Could not queue the bot command: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    const deadline = Date.now() + 90_000;
+    while (Date.now() < deadline) {
+      let current: BotControlCommand | null;
+      try {
+        current = await db.getBotCommand(guildId, commandId);
+      } catch (err) {
+        return {
+          ok: false,
+          status: 503,
+          error: `Could not read the bot command result: ${err instanceof Error ? err.message : String(err)}. The Discord outcome may be unknown; check the guild before retrying.`,
+        };
+      }
+      if (current?.status === 'completed' && current.operation === operation) {
+        if (!verifyBotControlResult(current, env.botControlSecret)) {
+          return {
+            ok: false,
+            status: 502,
+            error: 'Bot command result signature is missing or invalid.',
+          };
+        }
+        return { ok: true, result: current.result as BotControlResultMap[T] };
+      }
+      if (current?.status === 'failed' || current?.status === 'cancelled') {
+        return {
+          ok: false,
+          status: current.status === 'cancelled' ? 504 : 502,
+          error: current.error || 'The bot did not complete the command.',
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+
+    let cancelled = false;
+    try {
+      cancelled = await db.cancelQueuedBotCommand(
+        guildId,
+        commandId,
+        'API timed out before the bot claimed the command.',
+        new Date().toISOString(),
+      );
+    } catch (err) {
+      return {
+        ok: false,
+        status: 503,
+        error: `Could not confirm cancellation of the timed-out bot command: ${err instanceof Error ? err.message : String(err)}. Check the guild before retrying.`,
+      };
+    }
+    return {
+      ok: false,
+      status: 504,
+      error: cancelled
+        ? 'The bot did not claim the command before timeout; it was cancelled without execution.'
+        : 'The bot command timed out after being claimed. Its Discord outcome may be unknown; check the guild before retrying.',
+    };
+  };
 
   const automodEngine = new RuleBasedAutoModEngine();
   const app = express();
@@ -209,74 +417,40 @@ async function bootstrap() {
         return;
       }
 
-      let activeSession = session;
-      if (session.provider === 'discord_oauth') {
-        const targetGuildId = session.guildId || env.discordGuildId;
-        const guildState = await db.getGuild(targetGuildId).catch(() => null);
-        const liveGuild = botClient.getLiveDiscordGuild();
-        let liveMemberRoleNames: string[] | null = null;
-        let liveMemberRoleIds: string[] | null = null;
-        let liveCheckAttempted = false;
-
-        if (liveGuild) {
-          liveCheckAttempted = true;
-          const liveMember = await liveGuild.members.fetch(session.userId).catch(() => null);
-          if (liveMember) {
-            liveMemberRoleNames = [...liveMember.roles.cache.values()].map((r) => r.name);
-            liveMemberRoleIds = [...liveMember.roles.cache.values()].map((r) => r.id);
-          }
-        } else if (
-          env.discordBotToken &&
-          targetGuildId &&
-          targetGuildId !== 'shadowslayers-primary' &&
-          (!session.lastVerifiedAt || Date.now() - new Date(session.lastVerifiedAt).getTime() > 30_000)
-        ) {
-          liveCheckAttempted = true;
-          try {
-            const memberResp = await fetch(
-              `https://discord.com/api/v10/guilds/${targetGuildId}/members/${session.userId}`,
-              { headers: { Authorization: `Bot ${env.discordBotToken}` } },
-            );
-            if (memberResp.ok) {
-              const memberJson = (await memberResp.json()) as { roles?: string[] };
-              liveMemberRoleIds = Array.isArray(memberJson.roles) ? memberJson.roles : [];
-            } else if (memberResp.status !== 404) {
-              // Transient Discord REST outage: do not mark member absent
-              liveCheckAttempted = false;
-            }
-          } catch {
-            liveCheckAttempted = false;
-          }
-        }
-
-        const reval = revalidateDiscordOAuthSession({
-          session,
-          guildState,
-          liveMemberRoleNames,
-          liveMemberRoleIds,
-          liveCheckAttempted,
-          explicitAuthorizedUserIds: env.adminDiscordUserIds,
-        });
-        if (!reval.valid || !reval.updatedSession) {
-          res.status(403).json({ error: reval.reason });
+      let activeDiscordAccess: DiscordOAuthGuildAccess | null = null;
+      const targetGuildId = req.params.guildId || session.guildId || '';
+      if (targetGuildId) {
+        if (!session.authorizedGuildIds.includes(targetGuildId)) {
+          res.status(403).json({ error: 'This session is not authorized for the requested guild.' });
           return;
         }
-        activeSession = reval.updatedSession;
+        try {
+          activeDiscordAccess = await fetchLiveDiscordGuildAccess(targetGuildId, session.userId);
+        } catch {
+          res.status(503).json({ error: 'Could not verify current Discord guild permissions. Retry shortly.' });
+          return;
+        }
+        if (!activeDiscordAccess || !qualifiesAsDiscordGuildManager(activeDiscordAccess)) {
+          discordAccessCache.delete(`${targetGuildId}:${session.userId}`);
+          res.status(403).json({ error: 'Current Discord guild permissions no longer authorize this dashboard.' });
+          return;
+        }
       }
 
-      if (
-        req.params.guildId &&
-        !sessionCanAccessGuild(activeSession, req.params.guildId, env.discordGuildId)
-      ) {
-        res.status(403).json({ error: 'This session is not authorized for the requested guild.' });
-        return;
+      if (capability) {
+        if (
+          !activeDiscordAccess ||
+          !hasDiscordDashboardCapability(
+            activeDiscordAccess,
+            capability,
+            typeof req.body?.action === 'string' ? req.body.action : undefined,
+          )
+        ) {
+          res.status(403).json({ error: `Missing Discord permission for dashboard capability: ${capability}` });
+          return;
+        }
       }
-
-      if (capability && !hasCapability(activeSession.clanRank, capability)) {
-        res.status(403).json({ error: `Missing permission capability: ${capability}` });
-        return;
-      }
-      req.sessionUser = activeSession;
+      req.sessionUser = session;
       next();
     };
   };
@@ -311,135 +485,32 @@ async function bootstrap() {
       ok: true,
       service: 'ShadowSlayers – Legends of Elements',
       databaseAdapter: db.driverName,
-      bot: botClient.getStatus(),
+      bot: await getPublicBotRuntimeStatus(),
       guildCount: guildIds.length,
       timestamp: new Date().toISOString(),
     });
   });
 
-  // Auth status & claim availability
-  app.get('/api/auth/status', async (_req, res) => {
-    const adminAuth = await db.getAdminAuth();
-    const envPasscodeConfigured = env.adminPasscode.trim().length > 0;
+  app.get('/api/auth/status', (_req, res) => {
     const discordOAuthConfigured = Boolean(env.discordClientId && env.discordClientSecret);
-    res.json({
-      discordOAuthConfigured,
-      envPasscodeConfigured,
-      adminClaimed: Boolean(adminAuth) || envPasscodeConfigured,
-      claimedUsername: adminAuth?.username ?? (envPasscodeConfigured ? '👑 Shadow King' : null),
-    });
-  });
-
-  // One-time first-run admin claim (locks permanently once claimed or when ADMIN_PASSCODE is configured)
-  app.post('/api/auth/claim-admin', rateLimit(10, 60_000), async (req, res) => {
-    if (env.nodeEnv === 'production' || env.databaseAdapter === 'firestore') {
-      res.status(403).json({ error: 'First-run admin claiming is disabled for production and Firestore. Configure ADMIN_PASSCODE before startup.' });
-      return;
-    }
-    if (env.adminPasscode.trim().length > 0) {
-      res.status(403).json({ error: 'Admin passcode is managed via server environment secret.' });
-      return;
-    }
-    const existing = await db.getAdminAuth();
-    if (existing) {
-      res.status(409).json({ error: 'Administrator credentials have already been claimed.' });
-      return;
-    }
-
-    const username = typeof req.body?.username === 'string' ? req.body.username.trim() : 'ShadowKing';
-    const password = typeof req.body?.password === 'string' ? req.body.password : '';
-    if (password.length < 8 || password.length > 128) {
-      res.status(400).json({ error: 'Password must be between 8 and 128 characters.' });
-      return;
-    }
-    if (username.length < 2 || username.length > 40) {
-      res.status(400).json({ error: 'Username must be between 2 and 40 characters.' });
-      return;
-    }
-
-    const salt = crypto.randomBytes(16).toString('hex');
-    const passwordHash = hashPasswordScrypt(password, salt);
-    await db.setAdminAuth({
-      username,
-      salt,
-      passwordHash,
-      claimedAt: new Date().toISOString(),
-    });
-
-    const session: AuthUserSession = {
-      userId: 'u-101',
-      username,
-      avatarUrl: '/src/assets/images/avatar_shadow_king_1795519524578.jpg',
-      provider: 'admin_passcode',
-      clanRank: '👑 Shadow King',
-      guildVerified: true,
-      guildId: env.discordGuildId,
-      discordRoleIds: [],
-      permissions: getCapabilitiesForRank('👑 Shadow King'),
-      expiresAt: new Date(Date.now() + 12 * 3600_000).toISOString(),
-    };
-
-    const token = signSessionToken(session);
-    res.status(201).json({ token, user: session });
-  });
-
-  // Admin passcode sign-in
-  app.post('/api/auth/login', rateLimit(15, 60_000), async (req, res) => {
-    const password = typeof req.body?.password === 'string' ? req.body.password : '';
-    if (!password) {
-      res.status(400).json({ error: 'Passcode is required.' });
-      return;
-    }
-
-    let valid = false;
-    let username = '👑 Shadow King';
-
-    if (env.adminPasscode.trim().length > 0) {
-      const a = Buffer.from(password);
-      const b = Buffer.from(env.adminPasscode);
-      valid = a.length === b.length && crypto.timingSafeEqual(a, b);
-    } else {
-      const adminAuth = await db.getAdminAuth();
-      if (!adminAuth) {
-        res.status(409).json({ error: 'Initial administrator account has not been claimed yet.' });
-        return;
-      }
-      valid = verifyPasswordScrypt(password, adminAuth.salt, adminAuth.passwordHash);
-      username = adminAuth.username;
-    }
-
-    if (!valid) {
-      res.status(401).json({ error: 'Invalid administrator credentials.' });
-      return;
-    }
-
-    const session: AuthUserSession = {
-      userId: 'u-101',
-      username,
-      avatarUrl: '/src/assets/images/avatar_shadow_king_1795519524578.jpg',
-      provider: 'admin_passcode',
-      clanRank: '👑 Shadow King',
-      guildVerified: true,
-      guildId: env.discordGuildId,
-      discordRoleIds: [],
-      permissions: getCapabilitiesForRank('👑 Shadow King'),
-      expiresAt: new Date(Date.now() + 12 * 3600_000).toISOString(),
-    };
-
-    const token = signSessionToken(session);
-    res.json({ token, user: session });
+    res.json({ discordOAuthConfigured });
   });
 
   // Discord OAuth2 URL endpoint (Popup flow — opens Discord URL directly)
-  app.get('/api/auth/discord/url', (_req, res) => {
+  app.get('/api/auth/discord/url', (req, res) => {
     if (!env.discordClientId || !env.discordClientSecret) {
       res.status(503).json({
         error: 'Discord OAuth2 is not configured yet. Set DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET in server environment.',
       });
       return;
     }
+    const targetOrigin = req.headers.origin?.replace(/\/+$/, '');
+    if (!targetOrigin || !env.allowedOrigins.includes(targetOrigin)) {
+      res.status(403).json({ error: 'Discord OAuth2 must be started from a configured dashboard origin.' });
+      return;
+    }
     const state = crypto.randomBytes(24).toString('hex');
-    oauthStates.set(state, { createdAt: Date.now() });
+    oauthStates.set(state, { createdAt: Date.now(), targetOrigin });
     const redirectUri = `${env.appUrl}/auth/callback`;
     const params = new URLSearchParams({
       client_id: env.discordClientId,
@@ -469,7 +540,7 @@ async function bootstrap() {
       return;
     }
 
-    const targetOrigin = JSON.stringify(env.appUrl);
+    const targetOrigin = JSON.stringify(stateEntry.targetOrigin);
 
     try {
       const tokenResp = await fetch('https://discord.com/api/oauth2/token', {
@@ -502,54 +573,70 @@ async function bootstrap() {
       }
 
       const discordUser = (await userResp.json()) as { id: string; username: string; avatar: string | null };
-      const userGuilds = (await guildsResp.json()) as Array<{ id: string }>;
-      const userGuildIds = userGuilds.map((g) => g.id);
+      const userGuilds = (await guildsResp.json()) as Array<{
+        id: string;
+        name: string;
+        owner: boolean;
+        permissions: string;
+      }>;
+      const authorizedGuilds: AuthorizedDiscordGuild[] = [];
 
-      // Fetch live guild member roles via Bot token whenever configured
-      let liveMemberRoleIds: string[] | null = null;
-      let liveGuildCheckAttempted = false;
-      if (env.discordBotToken && env.discordGuildId && env.discordGuildId !== 'shadowslayers-primary') {
-        liveGuildCheckAttempted = true;
-        const memberResp = await fetch(
-          `https://discord.com/api/v10/guilds/${env.discordGuildId}/members/${discordUser.id}`,
-          { headers: { Authorization: `Bot ${env.discordBotToken}` } },
-        );
-        if (memberResp.ok) {
-          const memberJson = (await memberResp.json()) as { roles?: string[] };
-          liveMemberRoleIds = Array.isArray(memberJson.roles) ? memberJson.roles : [];
-        } else if (memberResp.status === 404) {
-          liveMemberRoleIds = null;
-        } else {
-          liveGuildCheckAttempted = false;
+      for (const oauthGuild of userGuilds) {
+        if (!/^\d{15,22}$/.test(oauthGuild.id) || !qualifiesAsDiscordGuildManager(oauthGuild)) continue;
+        const liveAccess = await fetchLiveDiscordGuildAccess(oauthGuild.id, discordUser.id);
+        if (!liveAccess || !qualifiesAsDiscordGuildManager(liveAccess)) continue;
+
+        let guild = await db.getGuild(oauthGuild.id);
+        if (!guild) {
+          guild = createInitialGuildSeed(oauthGuild.id, liveAccess.name);
+          await db.saveGuild(guild);
+        } else if (guild.guildName !== liveAccess.name) {
+          guild.guildName = liveAccess.name;
+          await db.saveGuild(guild);
         }
+
+        authorizedGuilds.push({
+          guildId: oauthGuild.id,
+          name: liveAccess.name,
+          owner: liveAccess.owner,
+          permissions: liveAccess.permissions,
+        });
       }
 
-      const guild = await db.getGuild(env.discordGuildId);
-      const authz = resolveAuthorizedDiscordOAuthSession({
-        discordUser,
-        userGuildIds,
-        targetGuildId: env.discordGuildId,
-        liveMemberRoleIds,
-        liveGuildCheckAttempted,
-        guildState: guild,
-        explicitAuthorizedUserIds: env.adminDiscordUserIds,
-      });
-
-      if (!authz.authorized || !authz.session) {
+      if (authorizedGuilds.length === 0) {
+        const reason = env.discordBotToken
+          ? 'No guilds were found where you have Administrator or Manage Server access and the bot is installed.'
+          : 'Discord guild verification is not configured. Set DISCORD_BOT_TOKEN on the trusted API.';
         res.status(403).send(`<!doctype html><html><body style="background:#0B0D12;color:#fca5a5;font-family:sans-serif;padding:24px;">
           <script>
             if (window.opener) {
-              window.opener.postMessage({ type: 'OAUTH_AUTH_ERROR', error: ${JSON.stringify(authz.reason)} }, ${targetOrigin});
+              window.opener.postMessage({ type: 'OAUTH_AUTH_ERROR', error: ${JSON.stringify(reason)} }, ${targetOrigin});
               window.close();
             }
           </script>
           <h3>Access Denied (403)</h3>
-          <p>${escapeHtml(authz.reason)}</p>
+          <p>${escapeHtml(reason)}</p>
         </body></html>`);
         return;
       }
 
-      const sessionToken = signSessionToken(authz.session);
+      const session: AuthUserSession = {
+        userId: discordUser.id,
+        username: discordUser.username,
+        avatarUrl: discordUser.avatar
+          ? `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png`
+          : null,
+        provider: 'discord_oauth',
+        clanRank: null,
+        guildVerified: true,
+        guildId: authorizedGuilds[0].guildId,
+        authorizedGuildIds: authorizedGuilds.map((guild) => guild.guildId),
+        discordRoleIds: [],
+        permissions: [],
+        lastVerifiedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 12 * 3600_000).toISOString(),
+      };
+      const sessionToken = signSessionToken(session);
       res.send(`<!doctype html><html><body style="background:#0B0D12;color:#f8fafc;font-family:sans-serif;padding:24px;">
         <script>
           if (window.opener) {
@@ -561,8 +648,9 @@ async function bootstrap() {
         </script>
         <p>Discord authentication verified. Closing window...</p>
       </body></html>`);
-    } catch {
-      res.status(500).send('OAuth callback processing failed.');
+    } catch (err) {
+      console.error('[ShadowSlayers] Discord OAuth callback failed:', err);
+      res.status(502).send('Discord OAuth verification failed. Check the trusted API logs.');
     }
   };
 
@@ -570,6 +658,21 @@ async function bootstrap() {
 
   app.get('/api/auth/me', requireAuth(), (req: AuthenticatedRequest, res) => {
     res.json({ user: req.sessionUser });
+  });
+
+  app.get('/api/auth/guilds', requireAuth(), async (req: AuthenticatedRequest, res) => {
+    const user = req.sessionUser;
+    if (!user) {
+      res.status(401).json({ error: 'Authentication required' });
+      return;
+    }
+    const guilds = await Promise.all(
+      user.authorizedGuildIds.map(async (guildId) => {
+        const guild = await db.getGuild(guildId);
+        return guild ? { guildId, name: guild.guildName } : null;
+      }),
+    );
+    res.json({ guilds: guilds.filter((guild) => guild !== null) });
   });
 
   // Guild State
@@ -593,7 +696,7 @@ async function bootstrap() {
       guild,
       languageCompleteness,
       commands: SLASH_COMMANDS,
-      botStatus: botClient.getStatus(),
+      botStatus: await getPublicBotRuntimeStatus(),
     });
   });
 
@@ -604,12 +707,18 @@ async function bootstrap() {
       res.status(404).json({ error: 'Guild not found' });
       return;
     }
-    const liveRescanned = await botClient.rescanLiveGuild(guild.discovery);
-    if (liveRescanned) {
-      guild.discovery = liveRescanned;
-    } else {
-      guild.discovery.lastDiscoveredAt = new Date().toISOString();
+    const command = await dispatchBotCommand(
+      guild.guildId,
+      req.sessionUser!,
+      'guild.rescan',
+      { snapshot: guild.discovery },
+    );
+    if (!command.ok) {
+      res.status(command.status).json({ error: command.error });
+      return;
     }
+    const liveRescanned = command.result;
+    guild.discovery = liveRescanned;
     await db.saveGuild(guild);
     await recordDashboardAudit(
       guild.guildId,
@@ -617,9 +726,9 @@ async function bootstrap() {
       'config_change',
       guild.guildId,
       guild.guildName,
-      `Ran non-destructive server discovery (${guild.discovery.categories.length} categories, ${guild.discovery.roles.length} roles, liveDiscord=${Boolean(liveRescanned)}).`,
+      `Ran non-destructive live server discovery (${guild.discovery.categories.length} categories, ${guild.discovery.roles.length} roles).`,
     );
-    res.json({ discovery: guild.discovery, liveDiscord: Boolean(liveRescanned) });
+    res.json({ discovery: guild.discovery, liveDiscord: true });
   });
 
   app.post('/api/guild/:guildId/discovery/confirm', requireAuth('discovery.apply'), async (req: AuthenticatedRequest, res) => {
@@ -634,45 +743,18 @@ async function bootstrap() {
     }
 
     const mode = req.body?.mode === 'full_setup' ? 'full_setup' : 'missing_only';
-    const liveReport = await botClient.applySetupOnLiveGuild(guild.discovery, {
-      mode,
-      actorUsername: req.sessionUser!.username,
-    });
-
-    if (liveReport) {
-      guild.discovery = liveReport.snapshot;
-      await db.saveGuild(guild);
-      await recordDashboardAudit(
-        guild.guildId,
-        req.sessionUser!,
-        'config_change',
-        guild.guildId,
-        guild.guildName,
-        `Executed live additive setup (${mode}): ${liveReport.appliedCount} applied, ${liveReport.failedCount} failed, ${liveReport.skippedConflicts} conflicts skipped.`,
-      );
-      res.json({
-        discovery: guild.discovery,
-        executionMode: 'live_discord',
-        report: {
-          appliedCount: liveReport.appliedCount,
-          failedCount: liveReport.failedCount,
-          skippedConflicts: liveReport.skippedConflicts,
-          skippedManualItems: liveReport.skippedManualItems,
-          failures: liveReport.failures,
-        },
-      });
+    const command = await dispatchBotCommand(
+      guild.guildId,
+      req.sessionUser!,
+      'guild.setup',
+      { snapshot: guild.discovery, mode, actorUsername: req.sessionUser!.username },
+    );
+    if (!command.ok) {
+      res.status(command.status).json({ error: command.error });
       return;
     }
-
-    // No live Discord Gateway connected: mark confirmed ONLY (never falsely mark 'applied')
-    const now = new Date().toISOString();
-    for (const change of guild.discovery.proposedChanges) {
-      if (change.status === 'proposed' || change.status === 'missing') {
-        change.status = 'confirmed';
-      }
-    }
-    guild.discovery.setupConfirmedBy = req.sessionUser!.username;
-    guild.discovery.setupConfirmedAt = now;
+    const liveReport = command.result;
+    guild.discovery = liveReport.snapshot;
     await db.saveGuild(guild);
     await recordDashboardAudit(
       guild.guildId,
@@ -680,9 +762,19 @@ async function bootstrap() {
       'config_change',
       guild.guildId,
       guild.guildName,
-      'Confirmed additive setup plan in standby mode (Discord Gateway offline — no live server changes applied yet).',
+      `Executed live additive setup (${mode}): ${liveReport.appliedCount} applied, ${liveReport.failedCount} failed, ${liveReport.skippedConflicts} conflicts skipped.`,
     );
-    res.json({ discovery: guild.discovery, executionMode: 'confirmed_awaiting_gateway' });
+    res.json({
+      discovery: guild.discovery,
+      executionMode: 'live_discord',
+      report: {
+        appliedCount: liveReport.appliedCount,
+        failedCount: liveReport.failedCount,
+        skippedConflicts: liveReport.skippedConflicts,
+        skippedManualItems: liveReport.skippedManualItems,
+        failures: liveReport.failures,
+      },
+    });
   });
 
   // Dynamic Language Management (Zero AI)
@@ -854,29 +946,32 @@ async function bootstrap() {
       return;
     }
 
-    const liveGuild = botClient.getLiveDiscordGuild();
-    if (!liveGuild) {
+    const preview = previewLanguageChannels(lang);
+    const command = await dispatchBotCommand(
+      guild.guildId,
+      req.sessionUser!,
+      'language.createChannels',
+      {
+        categoryName: preview.categoryName,
+        languageRoleName: lang.roleName,
+        channels: preview.channels,
+        actorUsername: req.sessionUser!.username,
+      },
+    );
+    if (!command.ok) {
       await recordDashboardAudit(
         guild.guildId,
         req.sessionUser!,
         'channel_create',
         code,
         lang.name,
-        `Rejected language channel creation for ${lang.name}: Discord Gateway is offline.`,
+        `Language channel creation for ${lang.name} failed before completion: ${command.error}`,
       );
-      res.status(503).json({
-        error: 'Discord Gateway is offline. Connect the bot to Discord before creating language categories and channels.',
-      });
+      res.status(command.status).json({ error: command.error });
       return;
     }
 
-    const preview = previewLanguageChannels(lang);
-    const discordResult = await botClient.createLanguageChannelsOnDiscord(liveGuild, {
-      categoryName: preview.categoryName,
-      languageRoleName: lang.roleName,
-      channels: preview.channels,
-      actorUsername: req.sessionUser!.username,
-    });
+    const discordResult = command.result;
     if (!discordResult.ok) {
       await recordDashboardAudit(
         guild.guildId,
@@ -1010,31 +1105,34 @@ async function bootstrap() {
         res.status(403).json({ error: `Your rank (${req.sessionUser!.clanRank ?? 'Unranked'}) cannot assign ${parsed.data.clanRank}.` });
         return;
       }
-      const liveGuild = botClient.getLiveDiscordGuild();
-      if (!liveGuild) {
-        res.status(503).json({
-          error: 'Discord Gateway is offline. Assigning clan hierarchy roles requires an active Discord connection.',
-        });
-        return;
-      }
       const prevRank = member.clanRank;
-      const grantRes = await botClient.grantRoleOnDiscord(
-        liveGuild,
-        member.userId,
-        parsed.data.clanRank,
-        `Clan rank updated by ${req.sessionUser!.username}`,
+      const changes: BotControlPayloadMap['member.applyRoleChanges']['changes'] = [
+        {
+          action: 'grant',
+          roleName: parsed.data.clanRank,
+          reason: `Clan rank updated by ${req.sessionUser!.username}`,
+        },
+      ];
+      if (prevRank) {
+        changes.push({
+          action: 'remove',
+          roleName: prevRank,
+          reason: `Clan rank replaced with ${parsed.data.clanRank} by ${req.sessionUser!.username}`,
+        });
+      }
+      const command = await dispatchBotCommand(
+        guild.guildId,
+        req.sessionUser!,
+        'member.applyRoleChanges',
+        { userId: member.userId, changes },
       );
-      if (!grantRes.ok) {
-        res.status(502).json({ error: grantRes.error || `Failed to assign ${parsed.data.clanRank} on Discord.` });
+      if (!command.ok) {
+        res.status(command.status).json({ error: command.error });
         return;
       }
-      if (prevRank) {
-        await botClient.removeRoleOnDiscord(
-          liveGuild,
-          member.userId,
-          prevRank,
-          `Clan rank replaced with ${parsed.data.clanRank} by ${req.sessionUser!.username}`,
-        );
+      if (!command.result.ok) {
+        res.status(502).json({ error: command.result.error || `Failed to assign ${parsed.data.clanRank} on Discord.` });
+        return;
       }
       member.clanRank = parsed.data.clanRank;
       member.hasClanRank = true;
@@ -1100,23 +1198,26 @@ async function bootstrap() {
       return;
     }
 
-    const liveGuild = botClient.getLiveDiscordGuild();
-    if (!liveGuild) {
+    const command = await dispatchBotCommand(
+      guild.guildId,
+      req.sessionUser!,
+      'rolePanel.publish',
+      { panel },
+    );
+    if (!command.ok) {
       await recordDashboardAudit(
         guild.guildId,
         req.sessionUser!,
         'role_change',
         panel.id,
         panel.title,
-        `Rejected role panel publish for "${panel.title}": Discord Gateway offline (prior status preserved).`,
+        `Role panel publish for "${panel.title}" failed before completion: ${command.error}`,
       );
-      res.status(503).json({
-        error: 'Discord Gateway is offline. Connect the bot to Discord before publishing role panels.',
-      });
+      res.status(command.status).json({ error: command.error });
       return;
     }
 
-    const pubRes = await botClient.publishRolePanelToDiscord(liveGuild, panel);
+    const pubRes = command.result;
     if (!pubRes.ok) {
       await recordDashboardAudit(
         guild.guildId,
@@ -1153,28 +1254,31 @@ async function bootstrap() {
       return;
     }
 
-    const liveGuild = botClient.getLiveDiscordGuild();
-    if (!liveGuild) {
+    const command = await dispatchBotCommand(
+      guild.guildId,
+      req.sessionUser!,
+      'rules.publish',
+      {
+        channelName: guild.onboarding.rulesChannelName,
+        title: guild.onboarding.rulesTitle,
+        body: guild.onboarding.rulesBody,
+        reactionEmoji: guild.onboarding.rulesReactionEmoji || '✅',
+      },
+    );
+    if (!command.ok) {
       await recordDashboardAudit(
         guild.guildId,
         req.sessionUser!,
         'config_change',
         guild.guildId,
         guild.onboarding.rulesChannelName,
-        `Rejected /rules publish to #${guild.onboarding.rulesChannelName}: Discord Gateway offline (prior rules status preserved).`,
+        `Rules publish to #${guild.onboarding.rulesChannelName} failed before completion: ${command.error}`,
       );
-      res.status(503).json({
-        error: 'Discord Gateway is offline. Connect the bot to Discord before publishing the rules verification gate.',
-      });
+      res.status(command.status).json({ error: command.error });
       return;
     }
 
-    const pubRes = await botClient.publishRulesToDiscord(liveGuild, {
-      channelName: guild.onboarding.rulesChannelName,
-      title: guild.onboarding.rulesTitle,
-      body: guild.onboarding.rulesBody,
-      reactionEmoji: guild.onboarding.rulesReactionEmoji || '✅',
-    });
+    const pubRes = command.result;
     if (!pubRes.ok) {
       await recordDashboardAudit(
         guild.guildId,
@@ -1210,16 +1314,18 @@ async function bootstrap() {
       return;
     }
 
-    const liveGuild = botClient.getLiveDiscordGuild();
+    const roleNamesCommand = guild.members.length
+      ? await dispatchBotCommand(
+        guild.guildId,
+        req.sessionUser!,
+        'member.getRoleNames',
+        { userIds: guild.members.map((member) => member.userId) },
+      )
+      : { ok: true as const, result: {} };
+    const liveRoleNamesByUser = roleNamesCommand.ok ? roleNamesCommand.result : {};
     const statuses = await Promise.all(
       guild.members.map(async (member) => {
-        let liveRoleNames: string[] | null = null;
-        if (liveGuild) {
-          const liveMember = await liveGuild.members.fetch(member.userId).catch(() => null);
-          if (liveMember) {
-            liveRoleNames = [...liveMember.roles.cache.values()].map((r) => r.name);
-          }
-        }
+        const liveRoleNames = roleNamesCommand.ok ? liveRoleNamesByUser[member.userId] ?? null : null;
         const rec = guild.onboardingRecords.find((r) => r.userId === member.userId) ?? null;
         return computeMemberOnboardingStatus(member, liveRoleNames, rec);
       }),
@@ -1228,7 +1334,7 @@ async function bootstrap() {
     res.json({
       onboarding: guild.onboarding,
       statuses,
-      liveDiscord: Boolean(liveGuild),
+      liveDiscord: roleNamesCommand.ok,
     });
   });
 
@@ -1240,32 +1346,29 @@ async function bootstrap() {
       return;
     }
 
-    const liveGuild = botClient.getLiveDiscordGuild();
-    if (!liveGuild) {
-      res.status(503).json({
-        error: 'Discord Gateway is offline. Assigning or revoking ✅ Verified requires an active Discord connection.',
-      });
-      return;
-    }
-
     const added = req.body?.verified !== false;
     const roleName = guild.onboarding.verifiedRoleName || '✅ Verified';
-    const discordRes = added
-      ? await botClient.grantRoleOnDiscord(
-          liveGuild,
-          member.userId,
+    const command = await dispatchBotCommand(
+      guild.guildId,
+      req.sessionUser!,
+      'member.applyRoleChanges',
+      {
+        userId: member.userId,
+        changes: [{
+          action: added ? 'grant' : 'remove',
           roleName,
-          `Dashboard rules verification by ${req.sessionUser!.username}`,
-        )
-      : await botClient.removeRoleOnDiscord(
-          liveGuild,
-          member.userId,
-          roleName,
-          `Dashboard rules verification revoked by ${req.sessionUser!.username}`,
-        );
-
-    if (!discordRes.ok) {
-      res.status(502).json({ error: discordRes.error || `Failed to update ${roleName} on Discord.` });
+          reason: added
+            ? `Dashboard rules verification by ${req.sessionUser!.username}`
+            : `Dashboard rules verification revoked by ${req.sessionUser!.username}`,
+        }],
+      },
+    );
+    if (!command.ok) {
+      res.status(command.status).json({ error: command.error });
+      return;
+    }
+    if (!command.result.ok) {
+      res.status(502).json({ error: command.result.error || `Failed to update ${roleName} on Discord.` });
       return;
     }
 
@@ -1295,19 +1398,17 @@ async function bootstrap() {
       return;
     }
 
-    const liveGuild = botClient.getLiveDiscordGuild();
-    if (!liveGuild) {
-      res.status(503).json({
-        error: 'Discord Gateway is offline. Assigning 🌱 Recruit requires an active Discord connection.',
-      });
+    const roleNamesCommand = await dispatchBotCommand(
+      guild.guildId,
+      req.sessionUser!,
+      'member.getRoleNames',
+      { userIds: [member.userId] },
+    );
+    if (!roleNamesCommand.ok) {
+      res.status(roleNamesCommand.status).json({ error: roleNamesCommand.error });
       return;
     }
-
-    let liveRoleNames: string[] | null = null;
-    const liveMember = await liveGuild.members.fetch(member.userId).catch(() => null);
-    if (liveMember) {
-      liveRoleNames = [...liveMember.roles.cache.values()].map((r) => r.name);
-    }
+    const liveRoleNames = roleNamesCommand.result[member.userId] ?? null;
 
     const cloned = JSON.parse(JSON.stringify(guild)) as GuildState;
     const result = grantActivePlayerRecruit(cloned, {
@@ -1321,14 +1422,25 @@ async function bootstrap() {
     }
 
     if (result.grantedRole) {
-      const grantRes = await botClient.grantRoleOnDiscord(
-        liveGuild,
-        member.userId,
-        result.grantedRole,
-        `Active-player onboarding confirmed by ${req.sessionUser!.username}`,
+      const grantCommand = await dispatchBotCommand(
+        guild.guildId,
+        req.sessionUser!,
+        'member.applyRoleChanges',
+        {
+          userId: member.userId,
+          changes: [{
+            action: 'grant',
+            roleName: result.grantedRole,
+            reason: `Active-player onboarding confirmed by ${req.sessionUser!.username}`,
+          }],
+        },
       );
-      if (!grantRes.ok) {
-        res.status(502).json({ error: grantRes.error || 'Discord failed to grant 🌱 Recruit.' });
+      if (!grantCommand.ok) {
+        res.status(grantCommand.status).json({ error: grantCommand.error });
+        return;
+      }
+      if (!grantCommand.result.ok) {
+        res.status(502).json({ error: grantCommand.result.error || 'Discord failed to grant 🌱 Recruit.' });
         return;
       }
     }
@@ -1364,33 +1476,35 @@ async function bootstrap() {
       return;
     }
 
-    const liveGuild = botClient.getLiveDiscordGuild();
-    if (!liveGuild) {
+    const now = new Date().toISOString();
+    const durationMinutes = parsed.data.durationMinutes ?? null;
+    const expiresAt = durationMinutes ? new Date(Date.now() + durationMinutes * 60_000).toISOString() : null;
+    const command = await dispatchBotCommand(
+      guild.guildId,
+      req.sessionUser!,
+      'moderation.execute',
+      {
+        action: parsed.data.action,
+        targetUserId: parsed.data.targetUserId,
+        reason: parsed.data.reason,
+        durationMinutes,
+        channelName: parsed.data.channelName ?? '💬・general-chat',
+      },
+    );
+    if (!command.ok) {
       await recordDashboardAudit(
         guild.guildId,
         req.sessionUser!,
         'moderation',
         parsed.data.targetUserId,
         parsed.data.targetUsername,
-        `Blocked dashboard ${parsed.data.action} against ${parsed.data.targetUsername}: Discord Gateway offline (no action applied).`,
+        `Dashboard ${parsed.data.action} against ${parsed.data.targetUsername} failed before completion: ${command.error}`,
       );
-      res.status(503).json({
-        error: 'Discord Gateway is offline. Moderation actions require an active Discord connection.',
-      });
+      res.status(command.status).json({ error: command.error });
       return;
     }
 
-    const now = new Date().toISOString();
-    const durationMinutes = parsed.data.durationMinutes ?? null;
-    const expiresAt = durationMinutes ? new Date(Date.now() + durationMinutes * 60_000).toISOString() : null;
-
-    const execRes = await botClient.executeLiveModeration(liveGuild, {
-      action: parsed.data.action,
-      targetUserId: parsed.data.targetUserId,
-      reason: parsed.data.reason,
-      durationMinutes,
-      channelName: parsed.data.channelName ?? '💬・general-chat',
-    });
+    const execRes = command.result;
 
     const discordExecutionStatus: 'verified_live' | 'failed' = execRes.ok ? 'verified_live' : 'failed';
     const discordError = execRes.ok ? null : execRes.error || 'Discord API rejected moderation operation.';
@@ -2198,19 +2312,25 @@ async function bootstrap() {
       res.status(400).json({ error: 'Invalid command payload' });
       return;
     }
-    const liveGuild = botClient.getLiveDiscordGuild();
-    const result = await executeSlashCommand(parsed.data.command, {
-      guildId: req.params.guildId,
-      actorUserId: req.sessionUser!.userId,
-      actorUsername: req.sessionUser!.username,
-      actorRank: req.sessionUser!.clanRank,
-      locale: 'en',
-      channelName: parsed.data.channelName,
-      args: parsed.data.args,
-      db,
-      discordExecutor: liveGuild ? botClient.buildDiscordExecutor(liveGuild) : undefined,
-    });
-    res.json({ result });
+    const command = await dispatchBotCommand(
+      req.params.guildId,
+      req.sessionUser!,
+      'command.execute',
+      {
+        command: parsed.data.command,
+        actorUserId: req.sessionUser!.userId,
+        actorUsername: req.sessionUser!.username,
+        actorRank: req.sessionUser!.clanRank,
+        locale: 'en',
+        channelName: parsed.data.channelName,
+        args: parsed.data.args,
+      },
+    );
+    if (!command.ok) {
+      res.status(command.status).json({ error: command.error });
+      return;
+    }
+    res.json({ result: command.result });
   });
 
   // Backup Export

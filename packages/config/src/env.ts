@@ -17,10 +17,8 @@ export interface RuntimeEnv {
   discordBotToken: string;
   discordClientId: string;
   discordClientSecret: string;
-  discordGuildId: string;
+  botControlSecret: string;
   discordCommandScope: DiscordCommandScope;
-  adminPasscode: string;
-  adminDiscordUserIds: string[];
   allowedOrigins: string[];
   sessionSecret: string;
   databaseAdapter: 'local' | 'firestore' | 'supabase';
@@ -52,11 +50,6 @@ export function loadEnv(): RuntimeEnv {
     .map((o) => o.trim().replace(/\/+$/, ''))
     .filter(Boolean);
 
-  const adminDiscordUserIds = (process.env.ADMIN_DISCORD_USER_IDS || '')
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean);
-
   const projectId = (process.env.FIREBASE_PROJECT_ID || '').trim();
   const clientEmail = (process.env.FIREBASE_CLIENT_EMAIL || '').trim();
   const privateKey = (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
@@ -70,10 +63,8 @@ export function loadEnv(): RuntimeEnv {
     discordBotToken: process.env.DISCORD_BOT_TOKEN || '',
     discordClientId: process.env.DISCORD_CLIENT_ID || '',
     discordClientSecret: process.env.DISCORD_CLIENT_SECRET || '',
-    discordGuildId: process.env.DISCORD_GUILD_ID || 'shadowslayers-primary',
+    botControlSecret: process.env.BOT_CONTROL_SECRET || '',
     discordCommandScope,
-    adminPasscode: process.env.ADMIN_PASSCODE || '',
-    adminDiscordUserIds,
     allowedOrigins: Array.from(
       new Set([
         appUrl,

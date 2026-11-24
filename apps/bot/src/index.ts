@@ -6,6 +6,7 @@ import {
   ButtonStyle,
   ChannelType,
   Client,
+  DiscordAPIError,
   Events,
   GatewayIntentBits,
   Partials,
@@ -18,6 +19,12 @@ import {
 } from 'discord.js';
 import type { DiscordCommandScope } from '../../../packages/config/src/env.ts';
 import type { DatabaseAdapter } from '../../../packages/database/src/adapter.ts';
+import { createInitialGuildSeed } from '../../../packages/database/src/seed.ts';
+import type { BotControlCommand, BotRuntimeSnapshot } from '../../../packages/shared/src/bot-control.ts';
+import {
+  signBotControlResult,
+  verifyBotControlCommand,
+} from '../../../packages/shared/src/bot-control-signature.ts';
 import {
   applySelfRoleSelection,
   canBotManageRolePosition,
@@ -101,8 +108,11 @@ export class ShadowSlayersBotClient {
   private client: Client | null = null;
   private readonly automod = new RuleBasedAutoModEngine();
   private readonly db: DatabaseAdapter;
-  private readonly guildId: string;
   private lastRegisteredCommandHash: string | null = null;
+  private controlPollTimer: NodeJS.Timeout | null = null;
+  private statusTimer: NodeJS.Timeout | null = null;
+  private controlPoll: Promise<void> | null = null;
+  private readonly controlWorkerId = `${process.pid}-${crypto.randomUUID()}`;
   private status: BotRuntimeStatus = {
     connected: false,
     mode: 'standby_no_token',
@@ -114,22 +124,212 @@ export class ShadowSlayersBotClient {
     commandsRegisteredCount: 0,
   };
 
-  constructor(db: DatabaseAdapter, guildId: string) {
+  constructor(db: DatabaseAdapter, private readonly botControlSecret = '') {
     this.db = db;
-    this.guildId = guildId;
   }
 
   getStatus(): BotRuntimeStatus {
     return { ...this.status };
   }
 
-  getLiveDiscordGuild(): Guild | null {
+  getLiveDiscordGuild(guildId?: string): Guild | null {
+    if (!guildId) return null;
     if (!this.client || !this.status.connected) return null;
-    return this.client.guilds.cache.get(this.guildId) ?? this.client.guilds.cache.first() ?? null;
+    return this.client.guilds.cache.get(guildId) ?? null;
   }
 
-  async rescanLiveGuild(existing: ServerDiscoverySnapshot): Promise<ServerDiscoverySnapshot | null> {
-    const liveGuild = this.getLiveDiscordGuild();
+  private async persistRuntimeStatus(guildIdsOverride?: string[]): Promise<void> {
+    if (this.db.driverName !== 'firestore') return;
+    const snapshot: BotRuntimeSnapshot = {
+      ...this.status,
+      guildIds: guildIdsOverride ?? (this.client ? [...this.client.guilds.cache.keys()].sort() : []),
+      updatedAt: new Date().toISOString(),
+    };
+    await this.db.setBotRuntimeStatus(snapshot);
+  }
+
+  private async executeControlCommand(command: BotControlCommand): Promise<unknown> {
+    if (!verifyBotControlCommand(command, this.botControlSecret)) {
+      throw new Error('Rejected bot command with an invalid API signature.');
+    }
+    const liveGuild = this.getLiveDiscordGuild(command.guildId);
+    if (!liveGuild) {
+      throw new Error(`Discord Gateway is not connected to guild ${command.guildId}.`);
+    }
+
+    switch (command.operation) {
+      case 'guild.rescan': {
+        const snapshot = await this.rescanLiveGuild(command.payload.snapshot, command.guildId);
+        if (!snapshot) throw new Error(`Could not rescan guild ${command.guildId}: Discord Gateway unavailable.`);
+        return snapshot;
+      }
+      case 'guild.setup': {
+        const report = await this.applySetupOnLiveGuild(command.payload.snapshot, {
+          mode: command.payload.mode,
+          actorUsername: command.payload.actorUsername,
+        }, command.guildId);
+        if (!report) throw new Error(`Could not apply setup to guild ${command.guildId}: Discord Gateway unavailable.`);
+        return report;
+      }
+      case 'language.createChannels':
+        return this.createLanguageChannelsOnDiscord(liveGuild, command.payload);
+      case 'member.applyRoleChanges': {
+        for (const change of command.payload.changes) {
+          const result = change.action === 'grant'
+            ? await this.grantRoleOnDiscord(liveGuild, command.payload.userId, change.roleName, change.reason)
+            : await this.removeRoleOnDiscord(liveGuild, command.payload.userId, change.roleName, change.reason);
+          if (!result.ok) return result;
+        }
+        return { ok: true };
+      }
+      case 'member.getRoleNames': {
+        const result: Record<string, string[] | null> = {};
+        for (let index = 0; index < command.payload.userIds.length; index += 5) {
+          const batch = command.payload.userIds.slice(index, index + 5);
+          await Promise.all(batch.map(async (userId) => {
+            let member: GuildMember;
+            try {
+              member = await liveGuild.members.fetch(userId);
+            } catch (err) {
+              if (err instanceof DiscordAPIError && err.code === 10007) {
+                result[userId] = null;
+                return;
+              }
+              throw err;
+            }
+            result[userId] = member ? [...member.roles.cache.values()].map((role) => role.name) : null;
+          }));
+        }
+        return result;
+      }
+      case 'rolePanel.publish':
+        return this.publishRolePanelToDiscord(liveGuild, command.payload.panel);
+      case 'rules.publish':
+        return this.publishRulesToDiscord(liveGuild, command.payload);
+      case 'moderation.execute':
+        return this.executeLiveModeration(liveGuild, command.payload);
+      case 'command.execute':
+        return executeSlashCommand(command.payload.command, {
+          guildId: command.guildId,
+          actorUserId: command.payload.actorUserId,
+          actorUsername: command.payload.actorUsername,
+          actorRank: command.payload.actorRank,
+          locale: command.payload.locale,
+          channelName: command.payload.channelName,
+          args: command.payload.args,
+          db: this.db,
+          discordExecutor: this.buildDiscordExecutor(liveGuild),
+        });
+      default: {
+        const exhaustive: never = command;
+        throw new Error(`Unsupported bot command: ${String(exhaustive)}`);
+      }
+    }
+  }
+
+  private async pollBotControlCommands(): Promise<void> {
+    if (
+      this.db.driverName !== 'firestore' ||
+      !this.client ||
+      !this.status.connected ||
+      this.controlPoll
+    ) return;
+
+    this.controlPoll = (async () => {
+      const guildIds = [...this.client!.guilds.cache.keys()];
+      const command = await this.db.claimNextBotCommand(
+        guildIds,
+        this.controlWorkerId,
+        new Date().toISOString(),
+      );
+      if (!command) return;
+
+      try {
+        const result = await this.executeControlCommand(command);
+        const resultSignature = signBotControlResult(command, result, this.botControlSecret);
+        const completed = await this.db.completeBotCommand(
+          command.guildId,
+          command.id,
+          this.controlWorkerId,
+          result,
+          resultSignature,
+          new Date().toISOString(),
+        );
+        if (!completed) {
+          console.error(`[ShadowSlayers] Lost claim while completing bot command ${command.id}.`);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await this.db.failBotCommand(
+          command.guildId,
+          command.id,
+          this.controlWorkerId,
+          message,
+          new Date().toISOString(),
+        );
+        console.error(`[ShadowSlayers] Bot command ${command.id} failed:`, message);
+      }
+    })()
+      .catch((err) => {
+        console.error('[ShadowSlayers] Bot control queue polling failed:', err);
+      })
+      .finally(() => {
+        this.controlPoll = null;
+      });
+
+    await this.controlPoll;
+  }
+
+  private startBotControlPolling(): void {
+    if (this.db.driverName !== 'firestore' || this.controlPollTimer) return;
+    this.controlPollTimer = setInterval(() => {
+      void this.pollBotControlCommands();
+    }, 5_000);
+    this.controlPollTimer.unref();
+    this.statusTimer = setInterval(() => {
+      void this.persistRuntimeStatus().catch((err) => {
+        console.error('[ShadowSlayers] Could not publish bot runtime status:', err);
+      });
+    }, 15_000);
+    this.statusTimer.unref();
+    void this.pollBotControlCommands();
+  }
+
+  private async auditRuntimeError(summary: string): Promise<void> {
+    const guildIds = new Set(this.client ? [...this.client.guilds.cache.keys()] : []);
+    await Promise.all([...guildIds].map(async (guildId) => {
+      try {
+        await this.db.appendAuditLog(guildId, {
+          id: `log-boterr-${crypto.randomUUID()}`,
+          guildId,
+          category: 'bot_error',
+          actorId: 'bot',
+          actorName: 'Discord Gateway',
+          targetId: null,
+          targetName: null,
+          summary,
+          details: {},
+          createdAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.error(`[ShadowSlayers] Could not audit bot error for guild ${guildId}:`, err);
+      }
+    }));
+  }
+
+  private async synchronizeGuildState(discordGuild: Guild): Promise<void> {
+    const guild = (await this.db.getGuild(discordGuild.id)) ??
+      createInitialGuildSeed(discordGuild.id, discordGuild.name);
+    guild.guildName = discordGuild.name;
+    guild.discovery = discoverLiveDiscordGuild(discordGuild as unknown as GuildLike, guild.discovery);
+    await this.db.saveGuild(guild);
+  }
+
+  async rescanLiveGuild(
+    existing: ServerDiscoverySnapshot,
+    guildId = existing.guildId,
+  ): Promise<ServerDiscoverySnapshot | null> {
+    const liveGuild = this.getLiveDiscordGuild(guildId);
     if (!liveGuild) return null;
     await liveGuild.roles.fetch();
     await liveGuild.channels.fetch();
@@ -139,8 +339,9 @@ export class ShadowSlayersBotClient {
   async applySetupOnLiveGuild(
     existing: ServerDiscoverySnapshot,
     options: { mode: 'missing_only' | 'full_setup'; actorUsername: string },
+    guildId = existing.guildId,
   ): Promise<SetupExecutionReport | null> {
-    const liveGuild = this.getLiveDiscordGuild();
+    const liveGuild = this.getLiveDiscordGuild(guildId);
     if (!liveGuild) return null;
     return executeAdditiveSetupOnDiscordGuild(liveGuild as unknown as GuildLike, existing, options);
   }
@@ -508,7 +709,7 @@ export class ShadowSlayersBotClient {
     liveGuild: Guild,
   ): Promise<{ ok: boolean; message: string }> {
     const [, panelId, itemRoleKey] = customId.split(':');
-    const guildState = await this.db.getGuild(this.guildId);
+    const guildState = await this.db.getGuild(liveGuild.id);
     if (!guildState) return { ok: false, message: 'Guild configuration missing.' };
 
     const panel = guildState.rolePanels.find((p) => p.id === panelId);
@@ -616,9 +817,9 @@ export class ShadowSlayersBotClient {
     memberRec.gamingClasses = sel.gamingClasses;
     memberRec.notificationRoles = sel.notificationRoles;
     await this.db.saveGuild(guildState);
-    await this.db.appendAuditLog(this.guildId, {
+    await this.db.appendAuditLog(liveGuild.id, {
       id: `log-selfrole-${Date.now()}`,
-      guildId: this.guildId,
+      guildId: liveGuild.id,
       category: 'role_change',
       actorId: member.id,
       actorName: member.user.username,
@@ -641,7 +842,8 @@ export class ShadowSlayersBotClient {
     added: boolean,
     liveGuild: Guild,
   ): Promise<void> {
-    const guildState = await this.db.getGuild(this.guildId);
+    const guildId = liveGuild.id;
+    const guildState = await this.db.getGuild(guildId);
     if (!guildState || !guildState.onboarding.enabled) return;
 
     const isRulesChannel =
@@ -663,9 +865,9 @@ export class ShadowSlayersBotClient {
     const botHighest = liveGuild.members.me?.roles.highest.position ?? 0;
 
     if (!resolvedVerified.matched || !canBotManageRolePosition(botHighest, resolvedVerified.matched.position)) {
-      await this.db.appendAuditLog(this.guildId, {
+      await this.db.appendAuditLog(guildId, {
         id: `log-rulesverify-err-${Date.now()}`,
-        guildId: this.guildId,
+        guildId,
         category: 'bot_error',
         actorId: userId,
         actorName: username,
@@ -685,9 +887,9 @@ export class ShadowSlayersBotClient {
         await member.roles.remove(resolvedVerified.matched.id, 'Removed ✅ rules verification reaction (unrelated roles preserved)');
       }
     } catch (err) {
-      await this.db.appendAuditLog(this.guildId, {
+      await this.db.appendAuditLog(guildId, {
         id: `log-rulesverify-fail-${Date.now()}`,
-        guildId: this.guildId,
+        guildId,
         category: 'bot_error',
         actorId: userId,
         actorName: username,
@@ -702,9 +904,9 @@ export class ShadowSlayersBotClient {
 
     applyRulesVerificationReaction(guildState, { userId, username, added });
     await this.db.saveGuild(guildState);
-    await this.db.appendAuditLog(this.guildId, {
+    await this.db.appendAuditLog(guildId, {
       id: `log-rulesverify-${Date.now()}`,
-      guildId: this.guildId,
+      guildId,
       category: 'role_change',
       actorId: userId,
       actorName: username,
@@ -719,8 +921,8 @@ export class ShadowSlayersBotClient {
   }
 
   private async syncLiveMemberRolesToDb(member: GuildMember, departed = false): Promise<void> {
-    if (member.guild.id !== this.guildId && this.guildId !== 'shadowslayers-primary') return;
-    const guildState = await this.db.getGuild(this.guildId);
+    const guildId = member.guild.id;
+    const guildState = await this.db.getGuild(guildId);
     if (!guildState) return;
     const rec = guildState.members.find((m) => m.userId === member.id);
     if (!rec) return;
@@ -748,21 +950,25 @@ export class ShadowSlayersBotClient {
   ): Promise<void> {
     if (!clientId) return;
     const payload = buildDiscordSlashCommandsJson();
-    const hash = crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+    const guildIds = this.client ? [...this.client.guilds.cache.keys()].sort() : [];
+    const useGlobal = commandScope === 'global' || (commandScope === 'auto' && guildIds.length === 0);
+    const hash = crypto.createHash('sha256')
+      .update(JSON.stringify({ payload, guildIds: useGlobal ? [] : guildIds, useGlobal }))
+      .digest('hex');
     if (this.lastRegisteredCommandHash === hash) {
       return;
     }
 
-    const useGuildScope =
-      commandScope === 'guild' || (commandScope === 'auto' && /^\d{15,22}$/.test(this.guildId));
     const rest = new REST().setToken(botToken);
 
-    if (useGuildScope && /^\d{15,22}$/.test(this.guildId)) {
-      await rest.put(Routes.applicationGuildCommands(clientId, this.guildId), { body: payload });
-      this.status.commandsScope = 'guild';
-    } else {
+    if (useGlobal) {
       await rest.put(Routes.applicationCommands(clientId), { body: payload });
       this.status.commandsScope = 'global';
+    } else {
+      for (const guildId of guildIds) {
+        await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: payload });
+      }
+      this.status.commandsScope = 'guild';
     }
 
     this.lastRegisteredCommandHash = hash;
@@ -770,12 +976,19 @@ export class ShadowSlayersBotClient {
   }
 
   async stop(): Promise<void> {
+    if (this.controlPollTimer) clearInterval(this.controlPollTimer);
+    if (this.statusTimer) clearInterval(this.statusTimer);
+    this.controlPollTimer = null;
+    this.statusTimer = null;
+    const guildIds = this.client ? [...this.client.guilds.cache.keys()].sort() : [];
+    if (this.controlPoll) await this.controlPoll;
     if (this.client) {
       this.client.destroy();
       this.client = null;
     }
     this.status.connected = false;
     this.status.mode = 'standby_no_token';
+    await this.persistRuntimeStatus(guildIds);
   }
 
   async start(
@@ -791,6 +1004,7 @@ export class ShadowSlayersBotClient {
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMessageReactions,
         GatewayIntentBits.GuildVoiceStates,
       ],
@@ -815,34 +1029,17 @@ export class ShadowSlayersBotClient {
         try {
           await this.registerSlashCommands(botToken, clientId, commandScope);
 
-          const primaryDiscordGuild = this.getLiveDiscordGuild();
-          if (primaryDiscordGuild) {
-            const guild = await this.db.getGuild(this.guildId);
-            if (guild) {
-              guild.discovery = discoverLiveDiscordGuild(primaryDiscordGuild as unknown as GuildLike, guild.discovery);
-              await this.db.saveGuild(guild);
-            }
+          for (const discordGuild of readyClient.guilds.cache.values()) {
+            await this.synchronizeGuildState(discordGuild);
           }
+          this.status.guildCount = readyClient.guilds.cache.size;
+          await this.persistRuntimeStatus();
+          this.startBotControlPolling();
           resolve();
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           this.status.lastError = msg;
-          try {
-            await this.db.appendAuditLog(this.guildId, {
-              id: `log-cmdreg-err-${Date.now()}`,
-              guildId: this.guildId,
-              category: 'bot_error',
-              actorId: 'bot',
-              actorName: 'Discord Gateway',
-              targetId: null,
-              targetName: null,
-              summary: `Slash command registration or startup discovery failed: ${msg}`,
-              details: {},
-              createdAt: new Date().toISOString(),
-            });
-          } catch (auditError) {
-            console.error('[ShadowSlayers] Could not audit bot startup failure:', auditError);
-          }
+          await this.auditRuntimeError(`Slash command registration or startup discovery failed: ${msg}`);
           reject(err);
         }
       });
@@ -850,6 +1047,26 @@ export class ShadowSlayersBotClient {
 
     this.client.on(Events.GuildMemberUpdate, (_oldMember, newMember) => {
       void this.syncLiveMemberRolesToDb(newMember, false);
+    });
+
+    this.client.on(Events.GuildCreate, (guild) => {
+      void this.synchronizeGuildState(guild)
+        .then(() => this.registerSlashCommands(botToken, clientId, commandScope))
+        .then(() => {
+          this.status.guildCount = this.client?.guilds.cache.size ?? 0;
+          return this.persistRuntimeStatus();
+        })
+        .catch((err) => {
+          this.status.lastError = err instanceof Error ? err.message : String(err);
+          console.error(`[ShadowSlayers] Could not initialize joined guild ${guild.id}:`, err);
+        });
+    });
+
+    this.client.on(Events.GuildDelete, () => {
+      this.status.guildCount = this.client?.guilds.cache.size ?? 0;
+      void this.persistRuntimeStatus().catch((err) => {
+        console.error('[ShadowSlayers] Could not publish updated bot guild list:', err);
+      });
     });
 
     this.client.on(Events.GuildMemberRemove, (member) => {
@@ -861,22 +1078,12 @@ export class ShadowSlayersBotClient {
     this.client.on(Events.Error, (err) => {
       this.status.lastError = err.message;
       rejectReady(err);
-      void this.db
-        .appendAuditLog(this.guildId, {
-          id: `log-boterr-${Date.now()}`,
-          guildId: this.guildId,
-          category: 'bot_error',
-          actorId: 'bot',
-          actorName: 'Discord Gateway',
-          targetId: null,
-          targetName: null,
-          summary: `Discord Gateway error: ${err.message}`,
-          details: {},
-          createdAt: new Date().toISOString(),
-        })
-        .catch((auditError) => {
-          console.error('[ShadowSlayers] Could not audit Discord Gateway error:', auditError);
-        });
+      void this.auditRuntimeError(`Discord Gateway error: ${err.message}`).catch((auditError) => {
+        console.error('[ShadowSlayers] Could not audit Discord Gateway error:', auditError);
+      });
+      void this.persistRuntimeStatus().catch((statusError) => {
+        console.error('[ShadowSlayers] Could not publish bot Gateway error status:', statusError);
+      });
     });
 
     this.client.on(Events.MessageReactionAdd, async (reaction, user) => {
@@ -914,7 +1121,14 @@ export class ShadowSlayersBotClient {
     });
 
     this.client.on(Events.InteractionCreate, async (interaction) => {
-      const liveGuild = interaction.guild ?? this.getLiveDiscordGuild();
+      const guildId = interaction.guildId;
+      if (!guildId) {
+        if (interaction.isRepliable()) {
+          await interaction.reply({ ephemeral: true, content: 'This command is only available in a server.' });
+        }
+        return;
+      }
+      const liveGuild = interaction.guild ?? this.getLiveDiscordGuild(guildId);
       const memberRoles =
         interaction.member && 'roles' in interaction.member && 'cache' in interaction.member.roles
           ? [...interaction.member.roles.cache.values()].map((r) => r.name)
@@ -924,7 +1138,7 @@ export class ShadowSlayersBotClient {
       if (interaction.isButton()) {
         if (interaction.customId.startsWith('setup:') && liveGuild) {
           await dispatchLiveSetupButton(interaction, {
-            guildId: this.guildId,
+            guildId,
             actorUserId: interaction.user.id,
             actorUsername: interaction.user.username,
             actorRank,
@@ -934,7 +1148,7 @@ export class ShadowSlayersBotClient {
           return;
         }
         if (interaction.customId === 'onboarding:active_player' && liveGuild) {
-          const guildState = await this.db.getGuild(this.guildId);
+          const guildState = await this.db.getGuild(guildId);
           if (!guildState) {
             await interaction.reply({ ephemeral: true, content: 'Guild state missing.' });
             return;
@@ -979,7 +1193,7 @@ export class ShadowSlayersBotClient {
 
       if (interaction.commandName === 'setup' && liveGuild) {
         await handleLiveSlashSetup(interaction, {
-          guildId: this.guildId,
+          guildId,
           actorUserId: interaction.user.id,
           actorUsername: interaction.user.username,
           actorRank,
@@ -995,7 +1209,7 @@ export class ShadowSlayersBotClient {
 
       try {
         const result = await executeSlashCommand(fullName, {
-          guildId: this.guildId,
+          guildId,
           actorUserId: interaction.user.id,
           actorUsername: interaction.user.username,
           actorRank,
@@ -1026,7 +1240,8 @@ export class ShadowSlayersBotClient {
 
     this.client.on(Events.MessageCreate, async (message) => {
       if (message.author.bot || !message.guild) return;
-      const guild = await this.db.getGuild(this.guildId);
+      const guildId = message.guild.id;
+      const guild = await this.db.getGuild(guildId);
       if (!guild) return;
 
       const channelName = 'name' in message.channel && message.channel.name ? message.channel.name : 'unknown';
@@ -1045,9 +1260,9 @@ export class ShadowSlayersBotClient {
         if (modEval.recommendedActions.includes('delete') && message.deletable) {
           await message.delete().catch(() => undefined);
         }
-        await this.db.appendAuditLog(this.guildId, {
+        await this.db.appendAuditLog(guildId, {
           id: `log-automod-${Date.now()}`,
-          guildId: this.guildId,
+          guildId,
           category: 'automod',
           actorId: 'automod',
           actorName: 'RuleBasedAutoMod',

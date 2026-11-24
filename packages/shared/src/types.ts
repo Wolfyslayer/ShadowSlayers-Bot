@@ -734,14 +734,22 @@ export interface DatabaseRoot {
   guilds: Record<string, GuildState>;
 }
 
+export interface AuthorizedDiscordGuild {
+  guildId: string;
+  name: string;
+  owner: boolean;
+  permissions: string;
+}
+
 export interface AuthUserSession {
   userId: string;
   username: string;
   avatarUrl: string | null;
-  provider: 'discord_oauth' | 'admin_passcode';
-  clanRank: ClanRankName;
+  provider: 'discord_oauth';
+  clanRank: ClanRankName | null;
   guildVerified: boolean;
   guildId?: string;
+  authorizedGuildIds: string[];
   discordRoleIds: string[];
   permissions: string[];
   lastVerifiedAt?: string;

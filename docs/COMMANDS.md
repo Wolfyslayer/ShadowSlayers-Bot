@@ -6,7 +6,7 @@ All commands enforce RBAC permission validation, localized responses, structured
 - `npm run dev:bot` — Run the standalone bot from TypeScript (requires Discord configuration).
 - `npm run build:bot` / `npm run start:bot` — Build and start the bot independently of Express/Vite.
 - `npm run dev:dashboard`, `npm run build:dashboard`, `npm run preview:dashboard` — Dashboard development, static build, and local preview.
-- `npm run dev:api`, `npm run build:api`, `npm run start:api` — Run/build the trusted API separately. It is not a Discord Gateway host; Discord-dependent API routes are currently unavailable.
+- `npm run dev:api`, `npm run build:api`, `npm run start:api` — Run/build the trusted API separately. It is not a Discord Gateway host; live Discord actions are sent to the bot through the shared Firestore command queue.
 - `npm test`, `npm run lint`, `npm run security:check` — Offline tests, TypeScript check, and repository security checks.
 
 ## General & Diagnostics

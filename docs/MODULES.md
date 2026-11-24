@@ -4,7 +4,7 @@
 
 - **Bot (`apps/bot/src/main.ts`)** owns the sole Discord Gateway connection and persistent scheduler. Its production install uses `npm ci --omit=dev`; compiled output is `dist-bot/`.
 - **Dashboard (`src/`)** is a static GitHub Pages SPA built to `dist/`; it has no Discord or Firebase Admin credentials.
-- **Trusted API (`server.ts`)** is a separate API-only service built to `dist-api/`. It owns authentication and privileged Firestore access, but does not start a bot or scheduler. Live Discord-dependent dashboard mutations remain blocked until an authenticated API-to-bot control path exists.
+- **Trusted API (`server.ts`)** is a separate API-only service built to `dist-api/`. It owns authentication and privileged Firestore access, but does not start a bot or scheduler. Live Discord-dependent dashboard mutations are authorized and signed by the API, then dispatched to the bot through the shared Firestore command queue.
 - Firebase client operations: none currently approved. The current schema, Firebase Auth setup, Firestore rules, and session model are not aligned for direct browser access.
 
 1. **Discovery & Setup Engine (`apps/bot/src/services/discovery.ts`, `apps/bot/src/commands/setup.ts`)** — Maps all 9 legacy categories, 32 text channels, 5 voice channels, and 16 legacy roles (`👑 Shadow King` manual-only), flags misplaced channels, type mismatches, permission drifts, and ambiguous conflicts, and runs an ephemeral initiator-locked `/setup` confirmation flow.
@@ -19,6 +19,6 @@
 10. **Tickets & Support** — Numbered private tickets, claim/transfer/close/reopen, transcripts, and feedback.
 11. **Community Suite** — Suggestions, polls, giveaways, events, reminders, birthdays, challenges, inactivity reports, and scheduled announcements.
 12. **Clan & Gaming Management** — Game-agnostic classes, teams/squads, raid & dungeon schedules, and attendance tracking.
-13. **Persistent Scheduler (`apps/bot/src/services/scheduler.ts`)** — Crash-safe, idempotent background task runner surviving restarts without duplicate dispatch. In Firestore, tasks reside in subcollection `guilds/{guildId}/scheduledTasks` with transaction-protected status reconciliation.
+13. **Persistent Scheduler (`apps/bot/src/services/scheduler.ts`)** — Crash-safe, idempotent background task runner surviving restarts without duplicate dispatch. In Firestore, tasks reside in subcollection `guilds/{guildId}/scheduledTasks` with transaction-protected status reconciliation. It runs only in the standalone bot process.
 14. **Production Database Adapter (`packages/database/src/firestore-adapter.ts`)** — Official Firebase Admin SDK adapter with guild-level isolation, subcollections, transactions, per-guild locks, exponential backoff retries, and strict non-fallback behavior.
 
