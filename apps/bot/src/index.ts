@@ -109,6 +109,7 @@ export class ShadowSlayersBotClient {
   private readonly automod = new RuleBasedAutoModEngine();
   private readonly db: DatabaseAdapter;
   private lastRegisteredCommandHash: string | null = null;
+  private readonly guildCommandRegistrationInFlight = new Map<string, Promise<void>>();
   private controlPollTimer: NodeJS.Timeout | null = null;
   private statusTimer: NodeJS.Timeout | null = null;
   private controlPoll: Promise<void> | null = null;
@@ -943,6 +944,37 @@ export class ShadowSlayersBotClient {
     await this.db.saveGuild(guildState);
   }
 
+  private async registerSlashCommandsForGuild(
+    botToken: string,
+    clientId: string,
+    guildId: string,
+  ): Promise<void> {
+    const pending = this.guildCommandRegistrationInFlight.get(guildId);
+    if (pending) {
+      await pending;
+      return;
+    }
+
+    const registration = (async () => {
+      const rest = new REST().setToken(botToken);
+      await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
+        body: buildDiscordSlashCommandsJson(),
+      });
+      this.status.commandsScope = 'guild';
+      this.status.commandsRegisteredCount = buildDiscordSlashCommandsJson().length;
+      console.log(`[ShadowSlayers] Registered slash commands for newly joined guild ${guildId}.`);
+    })();
+
+    this.guildCommandRegistrationInFlight.set(guildId, registration);
+    try {
+      await registration;
+    } finally {
+      if (this.guildCommandRegistrationInFlight.get(guildId) === registration) {
+        this.guildCommandRegistrationInFlight.delete(guildId);
+      }
+    }
+  }
+
   async registerSlashCommands(
     botToken: string,
     clientId: string,
@@ -1050,16 +1082,27 @@ export class ShadowSlayersBotClient {
     });
 
     this.client.on(Events.GuildCreate, (guild) => {
-      void this.synchronizeGuildState(guild)
-        .then(() => this.registerSlashCommands(botToken, clientId, commandScope))
-        .then(() => {
-          this.status.guildCount = this.client?.guilds.cache.size ?? 0;
-          return this.persistRuntimeStatus();
-        })
-        .catch((err) => {
-          this.status.lastError = err instanceof Error ? err.message : String(err);
-          console.error(`[ShadowSlayers] Could not initialize joined guild ${guild.id}:`, err);
+      void (async () => {
+        console.log(`[ShadowSlayers] Detected guild availability/join: ${guild.name} (${guild.id}).`);
+        await this.synchronizeGuildState(guild);
+
+        // Global commands are already available in every guild. In auto/guild mode,
+        // register directly for this guild instead of depending on the full cache
+        // being refreshed and re-hashing every guild on the client.
+        if (commandScope !== 'global') {
+          await this.registerSlashCommandsForGuild(botToken, clientId, guild.id);
+        }
+
+        this.status.guildCount = this.client?.guilds.cache.size ?? 0;
+        this.status.lastError = null;
+        await this.persistRuntimeStatus();
+      })().catch((err) => {
+        this.status.lastError = err instanceof Error ? err.message : String(err);
+        console.error(`[ShadowSlayers] Could not initialize newly available guild ${guild.id}:`, err);
+        void this.persistRuntimeStatus().catch((statusError) => {
+          console.error('[ShadowSlayers] Could not publish guild initialization error:', statusError);
         });
+      });
     });
 
     this.client.on(Events.GuildDelete, () => {
