@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Send } from 'lucide-react';
+import { CheckCircle2, Plus, Send, ShieldCheck } from 'lucide-react';
 import type { GuildState, RoleCategory } from '../../../packages/shared/src/types';
 
 interface RolesViewProps {
@@ -14,13 +14,23 @@ interface RolesViewProps {
     items: { roleId: string; label: string; emoji: string; description: string }[];
   }) => Promise<void>;
   onPublishPanel: (panelId: string) => Promise<void>;
+  onPublishRules: () => Promise<void>;
+  onVerifyRules: (userId: string, verified: boolean) => Promise<void>;
+  onGrantActivePlayer: (userId: string) => Promise<void>;
 }
 
-export const RolesView: React.FC<RolesViewProps> = ({ guild, onCreatePanel, onPublishPanel }) => {
+export const RolesView: React.FC<RolesViewProps> = ({
+  guild,
+  onCreatePanel,
+  onPublishPanel,
+  onPublishRules,
+  onVerifyRules,
+  onGrantActivePlayer,
+}) => {
   const [showCreate, setShowCreate] = useState(false);
   const [title, setTitle] = useState('Notification Alerts');
   const [description, setDescription] = useState('Opt in or out of optional community notifications.');
-  const [channelName, setChannelName] = useState('role-selection');
+  const [channelName, setChannelName] = useState('🎭・choose-your-role');
   const [mode, setMode] = useState<'buttons' | 'select_menu' | 'reactions'>('buttons');
   const [groupType, setGroupType] = useState<'exclusive' | 'multiple'>('multiple');
   const [category, setCategory] = useState<RoleCategory>('notification');
@@ -67,19 +77,35 @@ export const RolesView: React.FC<RolesViewProps> = ({ guild, onCreatePanel, onPu
     <div className="space-y-6">
       <div className="rounded-xl border border-slate-800 bg-[#121620] p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="font-display text-xl font-semibold text-slate-100">Role Panels & Carl-bot Replacement</h2>
+          <h2 className="font-display text-xl font-semibold text-slate-100">Role Panels & 5-Step Onboarding</h2>
           <p className="text-sm text-slate-400 mt-1">
-            Language (exclusive), Class (exclusive), and Notification (multiple) self-role panels. Clan ranks remain leadership-assigned only. Publishing executes <span className="font-mono-tabular text-slate-200">/roles publish</span> only — never full server setup.
+            Language (exclusive), Class (exclusive), and Notification (multiple) panels in #🎭・choose-your-role & #🎭・выбор-ролей. Clan ranks stay leadership-only; 🌱 Recruit requires Step 5 active-player confirmation after Steps 1–3.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowCreate((v) => !v)}
-          className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold text-sm flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          <span>New Role Panel</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              setFeedback(null);
+              onPublishRules()
+                .then(() => setFeedback(`Published 📜・rules verification gate (${guild.onboarding.rulesReactionEmoji}).`))
+                .catch((err) => setError(err.message));
+            }}
+            className="px-4 py-2 rounded-lg border border-emerald-500/40 bg-emerald-950/30 hover:bg-emerald-950/50 text-emerald-300 font-medium text-sm flex items-center gap-2 cursor-pointer whitespace-nowrap"
+          >
+            <ShieldCheck className="w-4 h-4" />
+            <span>Publish 📜・rules Gate</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowCreate((v) => !v)}
+            className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold text-sm flex items-center gap-2 cursor-pointer whitespace-nowrap"
+          >
+            <Plus className="w-4 h-4" />
+            <span>New Role Panel</span>
+          </button>
+        </div>
       </div>
 
       {error && <div className="p-3 rounded-lg border border-red-500/40 bg-red-950/30 text-sm text-red-200">{error}</div>}
@@ -175,6 +201,89 @@ export const RolesView: React.FC<RolesViewProps> = ({ guild, onCreatePanel, onPu
             </div>
           </div>
         ))}
+      </div>
+
+      {/* 5-Step Onboarding Gate Tracker */}
+      <div className="rounded-xl border border-slate-800 bg-[#121620] p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 className="font-display text-lg font-semibold text-slate-100">5-Step Onboarding Tracker</h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              1) #{guild.onboarding.rulesChannelName} {guild.onboarding.rulesReactionEmoji} → ✅ Verified · 2) Language · 3) Class · 4) Notifications (optional) · 5) Active-Player → 🌱 Recruit
+            </p>
+          </div>
+          <span className="text-xs font-mono-tabular text-slate-400">
+            {guild.onboarding.rulesPublishedAt
+              ? `Rules published ${new Date(guild.onboarding.rulesPublishedAt).toLocaleString()}`
+              : 'Rules gate awaiting publish'}
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr className="border-b border-slate-800 text-xs text-slate-400">
+                <th className="py-2 pr-3 font-medium">Member</th>
+                <th className="py-2 pr-3 font-medium">Step 1 (Rules ✅)</th>
+                <th className="py-2 pr-3 font-medium">Step 2 (Lang)</th>
+                <th className="py-2 pr-3 font-medium">Step 3 (Class)</th>
+                <th className="py-2 pr-3 font-medium">Step 4 (Pings)</th>
+                <th className="py-2 pr-3 font-medium">Step 5 (Rank)</th>
+                <th className="py-2 font-medium text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/70">
+              {guild.members.map((m) => {
+                const hasRank = m.hasClanRank !== false;
+                const readyForStep5 = m.verified && m.languageCodes.length > 0 && m.gamingClasses.length > 0;
+                return (
+                  <tr key={m.userId} className="h-11">
+                    <td className="py-2 pr-3 text-slate-200 font-medium">{m.displayName}</td>
+                    <td className="py-2 pr-3 text-xs font-mono-tabular">
+                      <span className={m.verified ? 'text-emerald-400' : 'text-amber-400'}>
+                        {m.verified ? '✅ Verified' : 'Pending'}
+                      </span>
+                    </td>
+                    <td className="py-2 pr-3 text-xs text-slate-300">{m.languageCodes.join(', ') || 'Missing'}</td>
+                    <td className="py-2 pr-3 text-xs text-slate-300">{m.gamingClasses.join(', ') || 'Missing'}</td>
+                    <td className="py-2 pr-3 text-xs font-mono-tabular text-slate-400">{m.notificationRoles.length}</td>
+                    <td className="py-2 pr-3 text-xs text-amber-300">
+                      {hasRank ? m.clanRank : 'Unranked'}
+                    </td>
+                    <td className="py-2 text-right space-x-2 whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onVerifyRules(m.userId, !m.verified)
+                            .then(() => setFeedback(`Updated rules verification for ${m.username}.`))
+                            .catch((err) => setError(err.message))
+                        }
+                        className="px-2.5 py-1 rounded border border-slate-700 bg-[#171C28] text-xs text-slate-200 cursor-pointer"
+                      >
+                        {m.verified ? 'Revoke ✅' : 'Grant ✅'}
+                      </button>
+                      {!hasRank && (
+                        <button
+                          type="button"
+                          disabled={!readyForStep5}
+                          onClick={() =>
+                            onGrantActivePlayer(m.userId)
+                              .then(() => setFeedback(`Granted 🌱 Recruit to ${m.username}.`))
+                              .catch((err) => setError(err.message))
+                          }
+                          className="px-2.5 py-1 rounded border border-emerald-500/40 bg-emerald-950/30 disabled:opacity-40 text-xs text-emerald-300 cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-3 h-3 inline mr-1" />
+                          Grant 🌱 Recruit
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* Temporary Roles */}

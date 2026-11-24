@@ -59,7 +59,12 @@ export function getSetupSession(sessionId: string): SetupFlowSession | null {
 
 export function buildSetupPreviewSummary(snapshot: ReturnType<typeof discoverLiveDiscordGuild>): string {
   const mappedRoles = snapshot.roles.filter((r) => r.lifecycleState === 'mapped').length;
-  const missingRoles = snapshot.roles.filter((r) => r.lifecycleState === 'missing').map((r) => r.name);
+  const missingRoles = snapshot.roles
+    .filter((r) => r.lifecycleState === 'missing' && !r.excludeFromAutoSetup)
+    .map((r) => r.name);
+  const manualRoles = snapshot.roles
+    .filter((r) => r.lifecycleState === 'requires_manual_setup' || (r.lifecycleState === 'missing' && r.excludeFromAutoSetup))
+    .map((r) => r.name);
   const conflictingRoles = snapshot.roles.filter((r) => r.lifecycleState === 'conflicting').map((r) => r.name);
   const missingCats = snapshot.categories.filter((c) => c.lifecycleState === 'missing').map((c) => c.name);
   const missingChannels = snapshot.categories
@@ -73,19 +78,39 @@ export function buildSetupPreviewSummary(snapshot: ReturnType<typeof discoverLiv
 
   const lines = [
     `**ShadowSlayers Non-Destructive Setup Preview**`,
-    `• Mapped legacy roles: **${mappedRoles}** | Missing roles: **${missingRoles.length}**`,
+    `• Mapped legacy roles: **${mappedRoles}** | Missing auto-creatable roles: **${missingRoles.length}**`,
     `• Missing categories: **${missingCats.length}** | Missing channels: **${missingChannels.length}**`,
+    `• Misplaced channels: **${snapshot.incorrectPlacements.length}** | Type mismatches: **${snapshot.incorrectTypes.length}** | Permission diffs: **${snapshot.permissionDifferences.length}**`,
   ];
 
+  if (manualRoles.length > 0) {
+    lines.push(`• Manual Admin Setup Only (excluded from auto-create): ${manualRoles.join(', ')}`);
+  }
   if (missingRoles.length > 0) lines.push(`• Missing Roles: ${missingRoles.join(', ')}`);
   if (missingCats.length > 0) lines.push(`• Missing Categories: ${missingCats.join(', ')}`);
+  if (snapshot.incorrectPlacements.length > 0) {
+    lines.push(
+      `• Misplaced Channels (preserved, not moved): ${snapshot.incorrectPlacements
+        .slice(0, 5)
+        .map((p) => `${p.channelName} (${p.actualCategoryName ?? 'Uncategorized'} -> ${p.expectedCategoryName})`)
+        .join('; ')}`,
+    );
+  }
+  if (snapshot.incorrectTypes.length > 0) {
+    lines.push(
+      `• Channel Type Mismatches (preserved): ${snapshot.incorrectTypes
+        .slice(0, 5)
+        .map((t) => `${t.channelName} (${t.actualType} vs ${t.expectedType})`)
+        .join('; ')}`,
+    );
+  }
   if (conflictingItems.length > 0) {
     lines.push(
       `⚠️ **Conflicts Requiring Admin Resolution (${conflictingItems.length})**: ${conflictingItems.join(', ')} — auto-creation blocked to prevent duplicates.`,
     );
   }
   lines.push(
-    `_Existing roles, IDs, colors, positions, and permission overwrites will never be deleted, renamed, or overwritten._`,
+    `_Existing roles, IDs, colors, positions, and permission overwrites will never be deleted, renamed, moved, or overwritten._`,
   );
   return lines.join('\n');
 }

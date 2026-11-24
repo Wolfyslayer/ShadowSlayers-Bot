@@ -104,7 +104,9 @@ export const MembersView: React.FC<MembersViewProps> = ({ guild, onUpdateMember 
                   }`}
                 >
                   <td className="py-2 pr-3 font-medium text-slate-100">{m.displayName}</td>
-                  <td className="py-2 pr-3 text-xs text-amber-300">{m.clanRank}</td>
+                  <td className="py-2 pr-3 text-xs text-amber-300">
+                    {m.hasClanRank === false ? 'Unranked (Onboarding)' : m.clanRank}
+                  </td>
                   <td className="py-2 pr-3 font-mono-tabular text-xs text-slate-300">
                     {m.languageCodes.join(', ') || 'none'}
                   </td>

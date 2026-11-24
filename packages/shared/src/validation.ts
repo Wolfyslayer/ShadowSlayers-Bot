@@ -128,5 +128,20 @@ export const memberUpdateSchema = z.object({
 export const commandExecuteSchema = z.object({
   command: z.string().min(1).max(60),
   args: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
-  channelName: z.string().min(1).max(80).default('bot-commands'),
+  channelName: z.string().min(1).max(80).default('💬・general-chat'),
 });
+
+export const customResponseCreateSchema = z.object({
+  trigger: z.string().min(1).max(80),
+  matchMode: z.enum(['exact', 'contains', 'startsWith']).default('contains'),
+  response: z.string().min(1).max(1500),
+  languageCode: z.string().max(12).nullable().optional(),
+});
+
+export const falsePositiveCreateSchema = z.object({
+  channelName: z.string().min(1).max(100),
+  sampleContent: z.string().min(1).max(1000),
+  ruleHits: z.array(z.string().max(60)).max(20).default([]),
+  notes: z.string().min(2).max(500),
+});
+

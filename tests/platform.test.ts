@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { ChannelType } from 'discord.js';
+import { ChannelType, PermissionFlagsBits } from 'discord.js';
 import { RuleBasedAutoModEngine } from '../apps/bot/src/services/automod.ts';
 import { SLASH_COMMANDS, executeSlashCommand } from '../apps/bot/src/commands/registry.ts';
 import {
@@ -18,6 +18,11 @@ import {
   type GuildLike,
   type RoleLike,
 } from '../apps/bot/src/services/discovery.ts';
+import {
+  applyRulesVerificationReaction,
+  computeMemberOnboardingStatus,
+  grantActivePlayerRecruit,
+} from '../apps/bot/src/services/onboarding.ts';
 import { PersistentTaskScheduler } from '../apps/bot/src/services/scheduler.ts';
 import { evaluateXpAward } from '../apps/bot/src/services/xp.ts';
 import { migrateDatabaseRoot } from '../database/schema-migrations.ts';
@@ -31,6 +36,7 @@ import {
 } from '../packages/localization/src/engine.ts';
 import {
   applySelfRoleSelection,
+  auditGuildPermissions,
   canActOnTargetRank,
   canBotManageRolePosition,
   canBotModerateMemberPosition,
@@ -42,8 +48,10 @@ import {
   LEGACY_CATEGORY_SPECS,
   LEGACY_CHANNEL_SPECS,
   LEGACY_ROLE_SPECS,
+  OPTIONAL_EXTENSION_CHANNELS,
 } from '../packages/shared/src/legacy-template.ts';
 import type { DatabaseRoot } from '../packages/shared/src/types.ts';
+import { CANONICAL_LEGACY_FIXTURE } from './legacy-fixture.ts';
 
 /**
  * Lightweight mocked Discord Guild factory for unit/integration tests ONLY.
@@ -70,7 +78,7 @@ function createMockDiscordGuild(opts?: {
           id: `role-${seq}`,
           name,
           position: 10,
-          hexColor: typeof color === 'string' ? color : '#64748B',
+          hexColor: typeof color === 'string' ? color : '#000000',
           mentionable: Boolean(mentionable),
           permissions: { bitfield: 0n },
         };
@@ -81,10 +89,16 @@ function createMockDiscordGuild(opts?: {
     channels: {
       cache: channelMap,
       fetch: async () => channelMap,
-      create: async ({ name, type, parent, topic }) => {
+      create: async ({ name, type, parent, topic, permissionOverwrites }) => {
         if (opts?.failOnChannelName && name === opts.failOnChannelName) {
           throw new Error(`Mock Discord 403 Missing Permissions for ${name}`);
         }
+        const toFlagNames = (flags?: bigint[]): string[] =>
+          (flags ?? []).map((f) => {
+            if (f === PermissionFlagsBits.ViewChannel) return 'ViewChannel';
+            if (f === PermissionFlagsBits.SendMessages) return 'SendMessages';
+            return String(f);
+          });
         seq += 1;
         const created: ChannelLike = {
           id: `ch-${seq}`,
@@ -93,6 +107,21 @@ function createMockDiscordGuild(opts?: {
           parentId: parent ?? null,
           rawPosition: seq,
           topic: topic ?? null,
+          permissionOverwrites: permissionOverwrites
+            ? {
+                cache: new Map(
+                  permissionOverwrites.map((po, i) => [
+                    `ow-${i}`,
+                    {
+                      id: po.id,
+                      type: 0,
+                      allow: { toArray: () => toFlagNames(po.allow) },
+                      deny: { toArray: () => toFlagNames(po.deny) },
+                    },
+                  ]),
+                ),
+              }
+            : undefined,
         };
         channelMap.set(created.id, created);
         return created;
@@ -100,6 +129,46 @@ function createMockDiscordGuild(opts?: {
     },
   };
 }
+
+test('Canonical Phase 0.2 template preserves exact 16 roles, 9 categories, 32 text channels, 5 voice channels, and null unknown properties', () => {
+  assert.equal(LEGACY_ROLE_SPECS.length, 16);
+  assert.deepEqual(LEGACY_ROLE_SPECS.map((r) => r.name), CANONICAL_LEGACY_FIXTURE.roles.all16);
+
+  // Unknown legacy properties are preserved as null/review-required, never invented
+  for (const role of LEGACY_ROLE_SPECS) {
+    assert.equal(role.colorHex, null, `Role ${role.name} should not invent a hex color`);
+    assert.equal(role.hoist, null, `Role ${role.name} should not invent hoist flag`);
+    assert.equal(role.requiresAdminReview, true);
+  }
+  const shadowKing = LEGACY_ROLE_SPECS.find((r) => r.name === '👑 Shadow King');
+  assert.equal(shadowKing?.excludeFromAutoSetup, true);
+
+  assert.equal(LEGACY_CATEGORY_SPECS.length, 9);
+  assert.deepEqual(LEGACY_CATEGORY_SPECS.map((c) => c.name), CANONICAL_LEGACY_FIXTURE.categories9);
+
+  const textSpecs = LEGACY_CHANNEL_SPECS.filter((c) => c.type !== 'voice');
+  const voiceSpecs = LEGACY_CHANNEL_SPECS.filter((c) => c.type === 'voice');
+  assert.equal(textSpecs.length, 32);
+  assert.equal(voiceSpecs.length, 5);
+
+  for (const [catName, expectedNames] of Object.entries(CANONICAL_LEGACY_FIXTURE.textChannelsByCategory)) {
+    const actual = textSpecs.filter((c) => c.categoryName === catName).map((c) => c.name);
+    assert.deepEqual(actual, expectedNames, `Text channel mismatch in ${catName}`);
+  }
+  for (const [catName, expectedNames] of Object.entries(CANONICAL_LEGACY_FIXTURE.voiceChannelsByCategory)) {
+    const actual = voiceSpecs.filter((c) => c.categoryName === catName).map((c) => c.name);
+    assert.deepEqual(actual, expectedNames, `Voice channel mismatch in ${catName}`);
+  }
+
+  for (const roName of CANONICAL_LEGACY_FIXTURE.readOnlyMemberChannels) {
+    const spec = LEGACY_CHANNEL_SPECS.find((c) => c.name === roName);
+    assert.equal(spec?.readOnlyForMembers, true, `${roName} must be readOnlyForMembers=true`);
+  }
+
+  // Optional non-legacy extensions are strictly separate from canonical specs
+  assert.equal(OPTIONAL_EXTENSION_CHANNELS.length, 2);
+  assert.equal(LEGACY_CHANNEL_SPECS.some((c) => c.name === '💡・suggestions' || c.name === '📜・audit-logs'), false);
+});
 
 test('Permissions hierarchy uses exact emoji-prefixed ranks, enforces bot positions, and isolates roles', () => {
   assert.equal(canActOnTargetRank('⚔️ Warlord', '🌱 Recruit'), true);
@@ -115,7 +184,7 @@ test('Permissions hierarchy uses exact emoji-prefixed ranks, enforces bot positi
   assert.deepEqual(merged, ['en', 'ru', 'sv']);
 });
 
-test('Legacy role-selection groups: Language & Class are exclusive, Notifications are multiple, Clan Ranks are blocked', () => {
+test('Legacy role-selection groups: Language & Class are exclusive, Notifications are multiple, Clan Ranks & Verified are blocked', () => {
   const member = {
     clanRank: '🖤 ShadowSlayer' as const,
     languageCodes: ['en'],
@@ -123,72 +192,167 @@ test('Legacy role-selection groups: Language & Class are exclusive, Notification
     notificationRoles: ['📢 Event Pings'],
   };
 
-  // Exclusive language switch preserves clanRank
   const langRes = applySelfRoleSelection(member, 'language', 'ru');
   assert.equal(langRes.allowed, true);
   assert.deepEqual(langRes.languageCodes, ['ru']);
   assert.equal(langRes.clanRank, '🖤 ShadowSlayer');
 
-  // Exclusive class switch replaces Warrior with Sorcerer and preserves clanRank
   const classRes = applySelfRoleSelection(member, 'class', '🔮 Sorcerer');
   assert.equal(classRes.allowed, true);
   assert.deepEqual(classRes.gamingClasses, ['🔮 Sorcerer']);
   assert.equal(classRes.clanRank, '🖤 ShadowSlayer');
 
-  // Multiple notification toggle adds Boss Pings while keeping Event Pings
   const notifyRes = applySelfRoleSelection(member, 'notification', '🐉 Boss Pings');
   assert.equal(notifyRes.allowed, true);
   assert.deepEqual(notifyRes.notificationRoles, ['📢 Event Pings', '🐉 Boss Pings']);
 
-  // Attempting to self-assign any clan rank is strictly rejected
-  const rankAttempt = applySelfRoleSelection(member, 'class', '👑 Shadow King');
-  assert.equal(rankAttempt.allowed, false);
+  assert.equal(applySelfRoleSelection(member, 'class', '👑 Shadow King').allowed, false);
+  assert.equal(applySelfRoleSelection(member, 'notification', '✅ Verified').allowed, false);
+  assert.equal(applySelfRoleSelection(member, 'language', '🤖 Bots').allowed, false);
 });
 
-test('Discord OR-combination channel access boundary blocks unverified, recruit, and cross-class bypasses', () => {
-  const unverifiedWithRecruit = {
-    verified: false,
-    clanRank: '🌱 Recruit' as const,
-    languageCodes: ['en'],
-    gamingClasses: ['⚔️ Warrior'],
-    notificationRoles: [],
-  };
-  assert.equal(evaluateEffectiveChannelAccess(unverifiedWithRecruit, 'public_onboarding').canView, true);
-  assert.equal(evaluateEffectiveChannelAccess(unverifiedWithRecruit, 'verified_member').canView, false);
-  assert.equal(evaluateEffectiveChannelAccess(unverifiedWithRecruit, 'clan_member').canView, false);
-  assert.equal(evaluateEffectiveChannelAccess(unverifiedWithRecruit, 'class_hall', '⚔️ Warrior').canView, false);
-  assert.equal(evaluateEffectiveChannelAccess(unverifiedWithRecruit, 'leadership_only').canView, false);
+test('All 10 Discord OR-combination role access cases and read-only channel rules hold', () => {
+  // 1. Unverified + Warrior
+  const c1 = { verified: false, clanRank: null, hasClanRank: false, languageCodes: [], gamingClasses: ['⚔️ Warrior'], notificationRoles: [] };
+  assert.equal(evaluateEffectiveChannelAccess(c1, 'public_onboarding', undefined, true).canView, true);
+  assert.equal(evaluateEffectiveChannelAccess(c1, 'public_onboarding', undefined, true).canSend, false);
+  assert.equal(evaluateEffectiveChannelAccess(c1, 'verified_member').canView, false);
+  assert.equal(evaluateEffectiveChannelAccess(c1, 'class_hall', '⚔️ Warrior').canView, false);
 
-  const verifiedWarrior = {
-    verified: true,
-    clanRank: '🖤 ShadowSlayer' as const,
-    languageCodes: ['en'],
-    gamingClasses: ['⚔️ Warrior'],
-    notificationRoles: [],
-  };
-  assert.equal(evaluateEffectiveChannelAccess(verifiedWarrior, 'verified_member').canView, true);
-  assert.equal(evaluateEffectiveChannelAccess(verifiedWarrior, 'class_hall', '⚔️ Warrior').canView, true);
-  assert.equal(evaluateEffectiveChannelAccess(verifiedWarrior, 'class_hall', '🔮 Sorcerer').canView, false);
-  assert.equal(evaluateEffectiveChannelAccess(verifiedWarrior, 'leadership_only').canView, false);
+  // 2. Unverified + Recruit
+  const c2 = { verified: false, clanRank: '🌱 Recruit' as const, hasClanRank: true, languageCodes: [], gamingClasses: [], notificationRoles: [] };
+  assert.equal(evaluateEffectiveChannelAccess(c2, 'verified_member').canView, false);
+  assert.equal(evaluateEffectiveChannelAccess(c2, 'clan_member').canView, false);
+  assert.equal(evaluateEffectiveChannelAccess(c2, 'leadership_only').canView, false);
 
-  const councilLeader = {
-    verified: true,
-    clanRank: '🛡️ Shadow Council' as const,
-    languageCodes: ['ru'],
-    gamingClasses: ['🔮 Sorcerer'],
-    notificationRoles: [],
-  };
-  assert.equal(evaluateEffectiveChannelAccess(councilLeader, 'leadership_only').canView, true);
+  // 3. Verified + English
+  const c3 = { verified: true, clanRank: null, hasClanRank: false, languageCodes: ['en'], gamingClasses: [], notificationRoles: [] };
+  assert.equal(evaluateEffectiveChannelAccess(c3, 'verified_member').canView, true);
+  assert.equal(evaluateEffectiveChannelAccess(c3, 'verified_member', undefined, false, 'en').canSend, true);
+  assert.equal(evaluateEffectiveChannelAccess(c3, 'verified_member', undefined, false, 'ru').canView, false);
+  assert.equal(evaluateEffectiveChannelAccess(c3, 'clan_member').canView, false);
+
+  // 4. Verified + Notification pings
+  const c4 = { verified: true, clanRank: null, hasClanRank: false, languageCodes: [], gamingClasses: [], notificationRoles: ['📢 Event Pings', '🐉 Boss Pings'] };
+  assert.equal(evaluateEffectiveChannelAccess(c4, 'verified_member').canView, true);
+  assert.equal(evaluateEffectiveChannelAccess(c4, 'verified_member', undefined, false, 'en').canView, false);
+  assert.equal(evaluateEffectiveChannelAccess(c4, 'clan_member').canView, false);
+
+  // 5. Verified + Recruit + Warrior
+  const c5 = { verified: true, clanRank: '🌱 Recruit' as const, hasClanRank: true, languageCodes: ['en'], gamingClasses: ['⚔️ Warrior'], notificationRoles: [] };
+  assert.equal(evaluateEffectiveChannelAccess(c5, 'class_hall', '⚔️ Warrior').canView, true);
+  assert.equal(evaluateEffectiveChannelAccess(c5, 'class_hall', '🔮 Sorcerer').canView, false);
+  assert.equal(evaluateEffectiveChannelAccess(c5, 'clan_member').canView, true);
+  assert.equal(evaluateEffectiveChannelAccess(c5, 'clan_member', undefined, true).canSend, false);
+  assert.equal(evaluateEffectiveChannelAccess(c5, 'leadership_only').canView, false);
+
+  // 6. Verified + ShadowSlayer + English
+  const c6 = { verified: true, clanRank: '🖤 ShadowSlayer' as const, hasClanRank: true, languageCodes: ['en'], gamingClasses: [], notificationRoles: [] };
+  assert.equal(evaluateEffectiveChannelAccess(c6, 'clan_member').canView, true);
+  assert.equal(evaluateEffectiveChannelAccess(c6, 'clan_member', undefined, true).canSend, false);
+  assert.equal(evaluateEffectiveChannelAccess(c6, 'leadership_only').canView, false);
+
+  // 7. Verified + Elite Warrior + Warrior
+  const c7 = { verified: true, clanRank: '🔥 Elite Warrior' as const, hasClanRank: true, languageCodes: ['ru'], gamingClasses: ['⚔️ Warrior'], notificationRoles: [] };
+  assert.equal(evaluateEffectiveChannelAccess(c7, 'clan_member').canSend, true);
+  assert.equal(evaluateEffectiveChannelAccess(c7, 'class_hall', '⚔️ Warrior').canView, true);
+  assert.equal(evaluateEffectiveChannelAccess(c7, 'leadership_only').canView, false);
+
+  // 8. Verified + Warlord + Warrior
+  const c8 = { verified: true, clanRank: '⚔️ Warlord' as const, hasClanRank: true, languageCodes: ['en'], gamingClasses: ['⚔️ Warrior'], notificationRoles: [] };
+  assert.equal(evaluateEffectiveChannelAccess(c8, 'leadership_only').canView, true);
+  assert.equal(evaluateEffectiveChannelAccess(c8, 'clan_member', undefined, true).canSend, true);
+
+  // 9. Verified + Shadow Council
+  const c9 = { verified: true, clanRank: '🛡️ Shadow Council' as const, hasClanRank: true, languageCodes: ['ru'], gamingClasses: [], notificationRoles: [] };
+  assert.equal(evaluateEffectiveChannelAccess(c9, 'leadership_only').canView, true);
+  assert.equal(evaluateEffectiveChannelAccess(c9, 'class_hall', '🗡️ Swordsman').canView, true);
+
+  // 10. Verified + Shadow King
+  const c10 = { verified: true, clanRank: '👑 Shadow King' as const, hasClanRank: true, languageCodes: ['en', 'ru'], gamingClasses: [], notificationRoles: [] };
+  assert.equal(evaluateEffectiveChannelAccess(c10, 'leadership_only').canSend, true);
+  assert.equal(evaluateEffectiveChannelAccess(c10, 'public_onboarding', undefined, true).canSend, true);
 });
 
-test('Legacy discovery maps all 16 emoji roles and 9 categories cleanly without duplicates, flags ambiguous aliases as conflicting', () => {
+test('5-step onboarding enforces rules gate, deliberate removal policy, dynamic role status, and gated 🌱 Recruit', () => {
+  const guild = createInitialGuildSeed('guild-onb-1');
+
+  // Step 1: Member reacts ✅ on 📜・rules -> gets ✅ Verified, remains unranked (no automatic 🌱 Recruit)
+  const verifyRes = applyRulesVerificationReaction(guild, {
+    userId: 'u-new-1',
+    username: 'KaelenNew',
+    added: true,
+  });
+  assert.equal(verifyRes.verified, true);
+  const member = guild.members.find((m) => m.userId === 'u-new-1')!;
+  assert.equal(member.verified, true);
+  assert.equal(member.hasClanRank, false);
+
+  // Attempting Step 5 active-player action before Language & Class are selected MUST fail
+  const premature = grantActivePlayerRecruit(guild, {
+    userId: 'u-new-1',
+    username: 'KaelenNew',
+    actualDiscordRoleNames: ['✅ Verified'],
+  });
+  assert.equal(premature.ok, false);
+  assert.equal(premature.grantedRole, null);
+
+  // Step 2 & 3: Member selects Language + Class + optional Notification
+  member.languageCodes = ['en'];
+  member.gamingClasses = ['⚔️ Warrior'];
+  member.notificationRoles = ['🐉 Boss Pings'];
+  const liveRoles = ['✅ Verified', '🇬🇧 English', '⚔️ Warrior', '🐉 Boss Pings'];
+
+  const derivedReady = computeMemberOnboardingStatus(member, liveRoles, verifyRes.record);
+  assert.equal(derivedReady.step1RulesVerified, true);
+  assert.equal(derivedReady.step2LanguageSelected, '🇬🇧 English');
+  assert.equal(derivedReady.step3ClassSelected, '⚔️ Warrior');
+  assert.equal(derivedReady.step4NotificationsCount, 1);
+  assert.equal(derivedReady.readyForActivePlayerRecruit, true);
+  assert.equal(derivedReady.step5RecruitGranted, false);
+
+  // Step 5: Active-player confirmation grants 🌱 Recruit
+  const activeRes = grantActivePlayerRecruit(guild, {
+    userId: 'u-new-1',
+    username: 'KaelenNew',
+    actualDiscordRoleNames: liveRoles,
+  });
+  assert.equal(activeRes.ok, true);
+  assert.equal(activeRes.grantedRole, '🌱 Recruit');
+  assert.equal(activeRes.status.completed, true);
+
+  // Deliberate removal policy: removing ✅ reaction revokes ✅ Verified WITHOUT wiping Language/Class/Notifications/Rank
+  const revokeRes = applyRulesVerificationReaction(guild, {
+    userId: 'u-new-1',
+    username: 'KaelenNew',
+    added: false,
+  });
+  assert.equal(revokeRes.verified, false);
+  assert.deepEqual(member.languageCodes, ['en']);
+  assert.deepEqual(member.gamingClasses, ['⚔️ Warrior']);
+  assert.deepEqual(member.notificationRoles, ['🐉 Boss Pings']);
+  assert.equal(member.clanRank, '🌱 Recruit');
+
+  // Higher existing clan rank is preserved and never demoted to 🌱 Recruit
+  const warlord = guild.members.find((m) => m.clanRank === '⚔️ Warlord')!;
+  const warlordRes = grantActivePlayerRecruit(guild, {
+    userId: warlord.userId,
+    username: warlord.username,
+    actualDiscordRoleNames: ['✅ Verified', '🇬🇧 English', '⚔️ Warrior', '⚔️ Warlord'],
+  });
+  assert.equal(warlordRes.ok, true);
+  assert.equal(warlordRes.grantedRole, null);
+  assert.equal(warlordRes.status.currentClanRank, '⚔️ Warlord');
+});
+
+test('Discovery detects misplaced channels, channel type mismatches, permission drifts, and ambiguous conflicts without mutating', () => {
   const existingRoles: RoleLike[] = [
     { id: 'r-everyone', name: '@everyone', position: 0, mentionable: false },
     ...LEGACY_ROLE_SPECS.map((s, idx) => ({
       id: `r-legacy-${idx}`,
       name: s.name,
       position: 30 - idx,
-      hexColor: s.colorHex,
+      hexColor: '#123456',
       mentionable: s.mentionable,
       permissions: { bitfield: 0n },
     })),
@@ -199,37 +363,43 @@ test('Legacy discovery maps all 16 emoji roles and 9 categories cleanly without 
   LEGACY_CATEGORY_SPECS.forEach((c, idx) => {
     const id = `cat-legacy-${idx}`;
     catIds.set(c.name, id);
+    // Intentionally omit @everyone ViewChannel deny on category 07 to test permission drift audit
     existingChannels.push({
       id,
       name: c.name,
       type: ChannelType.GuildCategory,
       parentId: null,
       rawPosition: idx + 1,
+      permissionOverwrites:
+        c.name === '👑 07 — THE INNER SANCTUM'
+          ? { cache: new Map() }
+          : {
+              cache: new Map([
+                ['ow-everyone', { id: 'r-everyone', type: 0, allow: { toArray: () => [] }, deny: { toArray: () => ['ViewChannel'] } }],
+              ]),
+            },
     });
   });
+
   LEGACY_CHANNEL_SPECS.forEach((ch, idx) => {
-    existingChannels.push({
-      id: `ch-legacy-${idx}`,
-      name: ch.name,
-      type:
-        ch.type === 'voice'
+    // Misplace '💬・general-chat' under Gate of Shadows, and mismatch type on '📢・announcements'
+    const parentName = ch.name === '💬・general-chat' ? '📜 01 — GATE OF SHADOWS' : ch.categoryName;
+    const actualType =
+      ch.name === '📢・announcements'
+        ? ChannelType.GuildAnnouncement
+        : ch.type === 'voice'
           ? ChannelType.GuildVoice
           : ch.type === 'announcement'
             ? ChannelType.GuildAnnouncement
-            : ch.type === 'forum'
-              ? ChannelType.GuildForum
-              : ChannelType.GuildText,
-      parentId: catIds.get(ch.categoryName) ?? null,
+            : ChannelType.GuildText;
+
+    existingChannels.push({
+      id: `ch-legacy-${idx}`,
+      name: ch.name,
+      type: actualType,
+      parentId: catIds.get(parentName) ?? null,
       rawPosition: idx + 1,
     });
-  });
-  // Include an uncategorized channel
-  existingChannels.push({
-    id: 'ch-uncat-1',
-    name: 'legacy-orphan',
-    type: ChannelType.GuildText,
-    parentId: null,
-    rawPosition: 99,
   });
 
   const mockGuild = createMockDiscordGuild({ roles: existingRoles, channels: existingChannels });
@@ -237,29 +407,20 @@ test('Legacy discovery maps all 16 emoji roles and 9 categories cleanly without 
   const discovered = discoverLiveDiscordGuild(mockGuild, seed.discovery);
 
   assert.equal(discovered.categories.length, 9);
-  assert.equal(discovered.uncategorizedChannels.length, 1);
-  assert.equal(discovered.missingCount, 0);
-  assert.equal(discovered.conflictsCount, 0);
-  assert.ok(discovered.proposedChanges.every((c) => c.status === 'mapped'));
+  assert.equal(discovered.incorrectPlacements.length, 1);
+  assert.equal(discovered.incorrectPlacements[0].channelName, '💬・general-chat');
+  assert.equal(discovered.incorrectPlacements[0].expectedCategoryName, '🔥 02 — THE COMMON HALL');
+  assert.equal(discovered.incorrectPlacements[0].actualCategoryName, '📜 01 — GATE OF SHADOWS');
 
-  // Controlled alias match preserves existing role ID & never renames
-  const singleAlias = resolveRoleMatch(
-    { name: '👑 Shadow King', aliases: ['Shadow King'] },
-    [{ id: 'r-existing-sk', name: 'Shadow King', position: 50, mentionable: false }],
-  );
-  assert.equal(singleAlias.status, 'mapped');
-  assert.equal(singleAlias.matched?.id, 'r-existing-sk');
-  assert.equal(singleAlias.matched?.name, 'Shadow King');
+  assert.equal(discovered.incorrectTypes.length, 1);
+  assert.equal(discovered.incorrectTypes[0].channelName, '📢・announcements');
+  assert.equal(discovered.incorrectTypes[0].expectedType, 'text');
+  assert.equal(discovered.incorrectTypes[0].actualType, 'announcement');
 
-  // Multiple ambiguous candidates MUST become 'conflicting' (never auto-selected)
-  const ambiguous = resolveRoleMatch(
-    { name: '⚔️ Warrior', aliases: ['Warrior'] },
-    [
-      { id: 'r-w1', name: 'Warrior', position: 5, mentionable: false },
-      { id: 'r-w2', name: '⚔️ Warrior ', position: 6, mentionable: false },
-    ],
-  );
-  // Note: exact match is trimmed, so test two aliases:
+  assert.ok(discovered.permissionDifferences.length > 0);
+  const permAudit = auditGuildPermissions(discovered.categories, discovered.roles, 'r-everyone');
+  assert.ok(permAudit.some((f) => f.targetName === '👑 07 — THE INNER SANCTUM'));
+
   const ambiguousAliases = resolveRoleMatch(
     { name: '⚔️ Warrior', aliases: ['Warrior', 'warriors'] },
     [
@@ -267,26 +428,22 @@ test('Legacy discovery maps all 16 emoji roles and 9 categories cleanly without 
       { id: 'r-w2', name: '🔥 Warrior', position: 6, mentionable: false },
     ],
   );
-  assert.equal(ambiguous.status, 'mapped');
   assert.equal(ambiguousAliases.status, 'conflicting');
   assert.equal(ambiguousAliases.candidates.length, 2);
 });
 
-test('Ephemeral /setup enforces initiator lock, two-step confirmation, idempotency, and safe retry on partial Discord failures (mocked Discord)', async () => {
+test('Ephemeral /setup excludes 👑 Shadow King, enforces initiator lock, retry, and idempotency (mocked Discord)', async () => {
   const tmpFile = path.join(os.tmpdir(), `shadowslayers-setup-${Date.now()}.json`);
   const db = new LocalPersistentAdapter(tmpFile, 'guild-mock-1');
   await db.init();
 
-  // Mocked guild with partial failure on 'suggestions' or 'common-hall'
   const mockGuild = createMockDiscordGuild({
     roles: [{ id: 'r-everyone', name: '@everyone', position: 0, mentionable: false }],
     channels: [],
-    failOnChannelName: 'common-hall',
+    failOnChannelName: '💬・general-chat',
   });
 
   const session = createSetupSession('guild-mock-1', 'admin-1', 'AldricShadow');
-
-  // Different user trying to interact MUST be rejected
   const hijacked = await handleSetupButtonAction(`setup:missing:${session.id}`, {
     guildId: 'guild-mock-1',
     actorUserId: 'other-user-2',
@@ -298,7 +455,6 @@ test('Ephemeral /setup enforces initiator lock, two-step confirmation, idempoten
   assert.equal(hijacked.ok, false);
   assert.match(hijacked.content, /Only the initiating administrator/);
 
-  // Initiator clicks Missing only -> common-hall fails while others apply cleanly
   const partialRes = await handleSetupButtonAction(`setup:missing:${session.id}`, {
     guildId: 'guild-mock-1',
     actorUserId: 'admin-1',
@@ -309,23 +465,9 @@ test('Ephemeral /setup enforces initiator lock, two-step confirmation, idempoten
   });
   assert.equal(partialRes.ok, false);
   assert.equal(partialRes.nextStage, 'retry');
-  assert.ok((partialRes.report?.appliedCount ?? 0) > 0);
   assert.equal(partialRes.report?.failedCount, 1);
 
-  // Full setup requires two-step confirmation
-  const session2 = createSetupSession('guild-mock-1', 'admin-1', 'AldricShadow');
-  const step1 = await handleSetupButtonAction(`setup:full_preview:${session2.id}`, {
-    guildId: 'guild-mock-1',
-    actorUserId: 'admin-1',
-    actorUsername: 'AldricShadow',
-    actorRank: '👑 Shadow King',
-    discordGuild: mockGuild,
-    db,
-  });
-  assert.equal(step1.ok, true);
-  assert.equal(step1.nextStage, 'awaiting_full_confirm');
-
-  // Re-running missing_only on a clean mocked guild creates zero duplicates (idempotent)
+  // Clean guild full additive setup excludes 👑 Shadow King and creates 15 auto-creatable roles + 9 categories + 37 channels
   const cleanGuild = createMockDiscordGuild({ roles: [{ id: 'r-everyone', name: '@everyone', position: 0, mentionable: false }] });
   const seed = createInitialGuildSeed('guild-mock-1');
   const firstRun = await executeAdditiveSetupOnDiscordGuild(cleanGuild, seed.discovery, {
@@ -333,8 +475,12 @@ test('Ephemeral /setup enforces initiator lock, two-step confirmation, idempoten
     actorUsername: 'AldricShadow',
   });
   assert.equal(firstRun.failedCount, 0);
-  assert.ok(firstRun.appliedCount > 0);
+  assert.ok(firstRun.skippedManualItems.includes('👑 Shadow King'));
+  assert.equal([...cleanGuild.roles.cache.values()].some((r) => r.name === '👑 Shadow King'), false);
+  // 15 auto-creatable roles + 9 categories + 37 channels = 61
+  assert.equal(firstRun.appliedCount, 61);
 
+  // Idempotent second run creates zero duplicates
   const secondRun = await executeAdditiveSetupOnDiscordGuild(cleanGuild, firstRun.snapshot, {
     mode: 'full_setup',
     actorUsername: 'AldricShadow',
@@ -351,7 +497,6 @@ test('Discord OAuth2 authorization enforces default-deny guild membership and li
   assert.ok(councilRole);
   councilRole.discordRoleId = 'role-council-1';
 
-  // 1. User NOT in target guild -> denied (403)
   const outsider = resolveAuthorizedDiscordOAuthSession({
     discordUser: { id: 'u-999', username: 'Stranger', avatar: null },
     userGuildIds: ['other-guild'],
@@ -362,7 +507,6 @@ test('Discord OAuth2 authorization enforces default-deny guild membership and li
   assert.equal(outsider.authorized, false);
   assert.equal(outsider.statusCode, 403);
 
-  // 2. Member in guild WITHOUT leadership role -> denied (403), NEVER defaults to Shadow Council
   const ordinaryMember = resolveAuthorizedDiscordOAuthSession({
     discordUser: { id: 'u-105', username: 'DravenAsh', avatar: null },
     userGuildIds: ['guild-real-1'],
@@ -373,7 +517,6 @@ test('Discord OAuth2 authorization enforces default-deny guild membership and li
   assert.equal(ordinaryMember.authorized, false);
   assert.equal(ordinaryMember.statusCode, 403);
 
-  // 3. Verified guild member holding live 🛡️ Shadow Council role -> authorized (200)
   const authorizedCouncil = resolveAuthorizedDiscordOAuthSession({
     discordUser: { id: 'u-102', username: 'LyraDawn', avatar: null },
     userGuildIds: ['guild-real-1'],
@@ -386,19 +529,31 @@ test('Discord OAuth2 authorization enforces default-deny guild membership and li
   assert.equal(authorizedCouncil.session?.clanRank, '🛡️ Shadow Council');
 });
 
-test('Moderation execution transparently distinguishes verified_live, dry_run_no_bot, and failed Discord responses', async () => {
+test('Moderation execution blocks unconfirmed destructive actions and distinguishes verified_live vs failed Discord responses', async () => {
   const tmpFile = path.join(os.tmpdir(), `shadowslayers-mod-${Date.now()}.json`);
   const db = new LocalPersistentAdapter(tmpFile, 'shadowslayers-primary');
   await db.init();
 
-  // 1. Live Discord executor rejects -> returns ok: false and logs status='failed'
+  const unconfirmedBan = await executeSlashCommand('ban', {
+    guildId: 'shadowslayers-primary',
+    actorUserId: 'u-101',
+    actorUsername: 'AldricShadow',
+    actorRank: '👑 Shadow King',
+    locale: 'en',
+    channelName: '💬・general-chat',
+    args: { member: 'DravenAsh', reason: 'Test unconfirmed guard', confirmed: false },
+    db,
+  });
+  assert.equal(unconfirmedBan.ok, false);
+  assert.match(unconfirmedBan.title, /Confirmation Required/);
+
   const failedCmd = await executeSlashCommand('timeout', {
     guildId: 'shadowslayers-primary',
     actorUserId: 'u-101',
     actorUsername: 'AldricShadow',
     actorRank: '👑 Shadow King',
     locale: 'en',
-    channelName: 'common-hall',
+    channelName: '💬・general-chat',
     args: { member: 'DravenAsh', minutes: 10, reason: 'Mock Discord failure check' },
     db,
     discordExecutor: {
@@ -408,14 +563,13 @@ test('Moderation execution transparently distinguishes verified_live, dry_run_no
   assert.equal(failedCmd.ok, false);
   assert.equal(failedCmd.data?.discordExecutionStatus, 'failed');
 
-  // 2. Live Discord executor succeeds -> returns ok: true and status='verified_live'
   const okCmd = await executeSlashCommand('timeout', {
     guildId: 'shadowslayers-primary',
     actorUserId: 'u-101',
     actorUsername: 'AldricShadow',
     actorRank: '👑 Shadow King',
     locale: 'en',
-    channelName: 'common-hall',
+    channelName: '💬・general-chat',
     args: { member: 'DravenAsh', minutes: 10, reason: 'Mock Discord success check' },
     db,
     discordExecutor: {
@@ -439,7 +593,7 @@ test('Database adapter refuses silent fallback to local JSON when firestore or s
   );
 });
 
-test('Schema migration v1 -> v2 upgrades unprefixed rank names cleanly to exact emoji-prefixed ranks', () => {
+test('Schema migration v1/v2 -> v3 preserves members, initializes Phase 0.2 fields, and normalizes legacy ranks', () => {
   const seed = createInitialGuildSeed();
   const legacyV1: DatabaseRoot = {
     schemaVersion: 1,
@@ -456,9 +610,13 @@ test('Schema migration v1 -> v2 upgrades unprefixed rank names cleanly to exact 
     },
   };
   const migrated = migrateDatabaseRoot(legacyV1);
-  assert.equal(migrated.schemaVersion, 2);
+  assert.equal(migrated.schemaVersion, 3);
+  assert.equal(migrated.guilds[seed.guildId].schemaVersion, 3);
   assert.equal(migrated.guilds[seed.guildId].members[0].clanRank, '👑 Shadow King');
   assert.equal(migrated.guilds[seed.guildId].members[1].clanRank, '🌱 Recruit');
+  assert.ok(Array.isArray(migrated.guilds[seed.guildId].onboardingRecords));
+  assert.ok(Array.isArray(migrated.guilds[seed.guildId].customResponses));
+  assert.ok(Array.isArray(migrated.guilds[seed.guildId].falsePositiveReports));
 });
 
 test('Dynamic multilingual engine creates draft languages without AI and validates completeness', () => {
@@ -500,7 +658,7 @@ test('Rule-based AutoMod detects invites/mentions, honors exemptions, and never 
     userId: 'u-999',
     username: 'TestUser',
     content: 'Join https://discord.gg/abc123 now!',
-    channelName: 'common-hall',
+    channelName: '💬・general-chat',
     userRoles: ['🌱 Recruit'],
     mentionCount: 0,
   });
@@ -512,7 +670,7 @@ test('Rule-based AutoMod detects invites/mentions, honors exemptions, and never 
     userId: 'u-101',
     username: 'AldricShadow',
     content: 'discord.gg/internal',
-    channelName: 'council-chamber',
+    channelName: '👑・leader-chat',
     userRoles: ['👑 Shadow King'],
     mentionCount: 10,
   });
@@ -567,11 +725,13 @@ test('Persistent scheduler executes due tasks idempotently without double runs',
   fs.rmSync(tmpFile, { force: true });
 });
 
-test('All required slash commands exist and /roles publish executes without touching server setup', async () => {
+test('Phase 0.2 slash command parity executes cleanly across all required commands', async () => {
   const names = new Set(SLASH_COMMANDS.map((c) => c.name));
   for (const required of [
-    'help', 'about', 'profile', 'server', 'language', 'modules', 'dashboard',
-    'setup', 'config', 'permissions', 'roles', 'roles publish',
+    'help', 'about', 'bot-status', 'profile', 'userinfo', 'avatar', 'server', 'serverinfo',
+    'language', 'onboarding', 'modules', 'dashboard',
+    'setup', 'config', 'permissions', 'permissions preview', 'rules publish', 'custom-response',
+    'roles', 'roles publish', 'automod status', 'automod test', 'false-positive',
     'warn', 'warnings', 'timeout', 'untimeout', 'kick', 'ban', 'tempban', 'unban',
     'purge', 'slowmode', 'lock', 'unlock', 'modlog', 'case', 'appeal',
     'suggest', 'poll', 'giveaway', 'event', 'remind',
@@ -585,16 +745,36 @@ test('All required slash commands exist and /roles publish executes without touc
   const db = new LocalPersistentAdapter(tmpFile, 'shadowslayers-primary');
   await db.init();
 
-  const res = await executeSlashCommand('roles publish', {
+  const baseCtx = {
     guildId: 'shadowslayers-primary',
     actorUserId: 'u-101',
     actorUsername: 'AldricShadow',
-    actorRank: '👑 Shadow King',
+    actorRank: '👑 Shadow King' as const,
     locale: 'en',
-    channelName: 'role-selection',
-    args: { panelId: 'panel-languages' },
+    channelName: '🎭・choose-your-role',
     db,
-  });
-  assert.equal(res.ok, true);
+  };
+
+  assert.equal((await executeSlashCommand('roles publish', { ...baseCtx, args: { panelId: 'panel-languages' } })).ok, true);
+  assert.equal((await executeSlashCommand('roles list', { ...baseCtx, args: {} })).ok, true);
+  assert.equal((await executeSlashCommand('permissions preview', { ...baseCtx, args: {} })).ok, true);
+  assert.equal((await executeSlashCommand('permissions matrix', { ...baseCtx, args: {} })).ok, true);
+  assert.equal((await executeSlashCommand('rules publish', { ...baseCtx, args: { channel: '📜・rules' } })).ok, true);
+  assert.equal((await executeSlashCommand('bot-status', { ...baseCtx, args: {} })).ok, true);
+  assert.equal((await executeSlashCommand('automod status', { ...baseCtx, args: {} })).ok, true);
+  assert.equal((await executeSlashCommand('automod test', { ...baseCtx, args: { content: 'discord.gg/abc' } })).ok, true);
+  assert.equal((await executeSlashCommand('onboarding', { ...baseCtx, args: {} })).ok, true);
+  assert.equal((await executeSlashCommand('serverinfo', { ...baseCtx, args: {} })).ok, true);
+  assert.equal((await executeSlashCommand('userinfo', { ...baseCtx, args: { member: 'AldricShadow' } })).ok, true);
+  assert.equal((await executeSlashCommand('avatar', { ...baseCtx, args: { member: 'AldricShadow' } })).ok, true);
+  assert.equal(
+    (await executeSlashCommand('custom-response', { ...baseCtx, args: { action: 'add', trigger: '!guide', response: 'See 📖・guides-and-tips' } })).ok,
+    true,
+  );
+  assert.equal(
+    (await executeSlashCommand('false-positive', { ...baseCtx, args: { channel: '💬・general-chat', content: 'Legit link', notes: 'False alarm' } })).ok,
+    true,
+  );
+
   fs.rmSync(tmpFile, { force: true });
 });

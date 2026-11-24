@@ -6,11 +6,11 @@
 
 | Metric | Status |
 | :--- | :--- |
-| **Current Phase** | Phase 0.1 – Legacy Bot Compatibility, Server Setup Audit & Foundation Corrections (On Feature Branch) |
+| **Current Phase** | Phase 0.2 – ShadowSlayers Legacy Reconstruction & Correction (Directly on `main`) |
 | **Verification Model** | Every phase tracks 5 gates: **Implemented**, **Automated Tests Passed**, **Live Discord Test Passed**, **Reviewed & Approved**, **Deployed** |
-| **Automated Implementation Progress** | Core architecture + Phase 0.1 compatibility corrections implemented & tested with **mocked Discord API objects**; **Live Discord Server Verification Pending** (`DISCORD_BOT_TOKEN` & live guild test required) |
-| **Blocked / External Dependencies** | `Wolfyslayer/shadow-slayers-discord-setup` inaccessible (HTTP 404 from sandbox); live Discord Gateway & external Firestore/GitHub remote pending deployment |
-| **Test Status** | Updated in `tests/platform.test.ts` (unit + mocked Discord API integration tests only; NOT live Discord tests) |
+| **Automated Implementation Progress** | Phase 0.2 legacy reconstruction (16 roles, 9 categories, 32 text channels, 5 voice channels, 5-step onboarding, permission & misplacement audits, command parity, schema v3) implemented & verified via **unit + mocked Discord API tests**; **Live Discord Server Verification Pending** (`DISCORD_BOT_TOKEN` & live guild test required) |
+| **Blocked / External Dependencies** | `Wolfyslayer/shadow-slayers-discord-setup` inaccessible (reconstructed strictly from Phase 0.2 specification); live Discord Gateway & external Firestore/GitHub remote push credentials pending |
+| **Test Status** | Exhaustive unit + mocked Discord API test suite in `tests/legacy-fixture.ts` and `tests/platform.test.ts` (NOT live Discord server tests) |
 
 ---
 
@@ -45,6 +45,22 @@
   - [x] Remove `@google/genai` completely and enforce non-fallback on `firestore`/`supabase` DB adapters
   - [x] Wire live Discord execution status (`verified_live` / `dry_run_no_bot` / `failed`) on moderation & `/roles publish`
   - [ ] Execute live test against target ShadowSlayers Discord guild and cross-check private repo `Wolfyslayer/shadow-slayers-discord-setup`
+
+## Phase 0.2 – ShadowSlayers Legacy Reconstruction & Correction
+- **Goals**: Reconstruct exact canonical server structure (**16 roles**, **9 categories**, **32 text channels**, **5 voice channels**) strictly from the Phase 0.2 specification without inventing unknown properties, implement 5-step onboarding, expand cross-category setup & permission audits, add missing legacy command parity, and upgrade schema to v3.
+- **Verification Gates**:
+  - [x] Implemented (directly on `main`)
+  - [x] Automated Tests Passed (`tests/legacy-fixture.ts` + `tests/platform.test.ts` with mocked Discord Guilds)
+  - [ ] Live Discord Test Passed (Requires live `DISCORD_BOT_TOKEN` & `DISCORD_GUILD_ID` against real test server)
+  - [ ] Reviewed & Approved
+  - [ ] Deployed
+- **Implementation Tasks**:
+  - [x] Reconstruct exact 16 roles (`colorHex: null`, `hoist: null`, `excludeFromAutoSetup: true` on `👑 Shadow King`), 9 categories, 32 text channels, 5 voice channels; isolate optional extension channels (`📜・audit-logs`, `💡・suggestions`)
+  - [x] Implement 5-step onboarding (`📜・rules` `✅` reaction add/remove, deliberate removal policy, dynamic role status derivation, gated Step 5 active-player `🌱 Recruit` action)
+  - [x] Expand Setup Manager for cross-category `incorrectPlacements`, `incorrectTypes`, `permissionDifferences`, conflict blocking, partial retry, and idempotency
+  - [x] Implement `/rules publish`, `/permissions preview`, `/bot-status`, `/automod status`, `/automod test`, `/onboarding`, `/serverinfo`, `/userinfo`, `/avatar`, `/custom-response`, `/false-positive`, and destructive moderation confirmation guards
+  - [x] Author `LEGACY_COMPATIBILITY_AUDIT.md`, `LEGACY_SERVER_SPECIFICATION.md`, `FEATURE_PARITY.md`, `SETUP_MANAGER.md`, and `ROLE_AND_PERMISSION_MODEL.md`
+  - [ ] Execute live end-to-end verification against target ShadowSlayers Discord server
 
 ## Phase 1 – Discord Core
 - **Goals**: Build a single, centralized Discord Gateway client in Node.js for Lunafy hosting with automatic recovery and slash-command registration.

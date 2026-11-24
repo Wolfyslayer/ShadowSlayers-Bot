@@ -268,7 +268,15 @@ export default function App() {
                     await refreshState();
                   }}
                   onConfirmSetup={async (mode) => {
-                    const res = await apiRequest<{ executionMode?: string }>(`/api/guild/${guildId}/discovery/confirm`, {
+                    const res = await apiRequest<{
+                      executionMode?: string;
+                      report?: {
+                        appliedCount?: number;
+                        failedCount?: number;
+                        skippedConflicts?: number;
+                        skippedManualItems?: string[];
+                      };
+                    }>(`/api/guild/${guildId}/discovery/confirm`, {
                       method: 'POST',
                       token,
                       body: { confirmed: true, mode },
@@ -354,6 +362,25 @@ export default function App() {
                     });
                     await refreshState();
                   }}
+                  onPublishRules={async () => {
+                    await apiRequest(`/api/guild/${guildId}/rules/publish`, { method: 'POST', token });
+                    await refreshState();
+                  }}
+                  onVerifyRules={async (userId, verified) => {
+                    await apiRequest(`/api/guild/${guildId}/onboarding/${userId}/verify-rules`, {
+                      method: 'POST',
+                      token,
+                      body: { verified },
+                    });
+                    await refreshState();
+                  }}
+                  onGrantActivePlayer={async (userId) => {
+                    await apiRequest(`/api/guild/${guildId}/onboarding/${userId}/active-player`, {
+                      method: 'POST',
+                      token,
+                    });
+                    await refreshState();
+                  }}
                 />
               )}
 
@@ -399,6 +426,22 @@ export default function App() {
                       };
                     }>(`/api/guild/${guildId}/automod/test`, { method: 'POST', token, body: payload });
                     return res.evaluation;
+                  }}
+                  onReportFalsePositive={async (payload) => {
+                    await apiRequest(`/api/guild/${guildId}/automod/false-positives`, {
+                      method: 'POST',
+                      token,
+                      body: payload,
+                    });
+                    await refreshState();
+                  }}
+                  onResolveFalsePositive={async (reportId, status) => {
+                    await apiRequest(`/api/guild/${guildId}/automod/false-positives/${reportId}`, {
+                      method: 'PATCH',
+                      token,
+                      body: { status },
+                    });
+                    await refreshState();
                   }}
                 />
               )}

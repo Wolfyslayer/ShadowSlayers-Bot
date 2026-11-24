@@ -12,14 +12,29 @@ interface AutoModViewProps {
     recommendedActions: string[];
     reason: string | null;
   }>;
+  onReportFalsePositive: (payload: {
+    channelName: string;
+    sampleContent: string;
+    ruleHits: string[];
+    notes: string;
+  }) => Promise<void>;
+  onResolveFalsePositive: (reportId: string, status: 'resolved' | 'dismissed') => Promise<void>;
 }
 
-export const AutoModView: React.FC<AutoModViewProps> = ({ guild, onSaveAutoMod, onTestAutoMod }) => {
+export const AutoModView: React.FC<AutoModViewProps> = ({
+  guild,
+  onSaveAutoMod,
+  onTestAutoMod,
+  onReportFalsePositive,
+  onResolveFalsePositive,
+}) => {
   const [cfg, setCfg] = useState<AutoModConfig>(guild.automod);
   const [testContent, setTestContent] = useState('Join my server discord.gg/example-invite');
-  const [testChannel, setTestChannel] = useState('common-hall');
+  const [testChannel, setTestChannel] = useState('💬・general-chat');
   const [testMentions, setTestMentions] = useState(0);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [fpRule, setFpRule] = useState('suspicious_link');
+  const [fpNotes, setFpNotes] = useState('');
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,6 +67,24 @@ export const AutoModView: React.FC<AutoModViewProps> = ({ guild, onSaveAutoMod, 
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Simulation failed');
+    }
+  };
+
+  const handleReportFp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setFeedback(null);
+    try {
+      await onReportFalsePositive({
+        channelName: testChannel,
+        sampleContent: testContent,
+        ruleHits: fpRule.split(',').map((s) => s.trim()).filter(Boolean),
+        notes: fpNotes || 'Flagged via dashboard AutoMod reviewer.',
+      });
+      setFpNotes('');
+      setFeedback('False-positive report logged for moderator review.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Report failed');
     }
   };
 
@@ -211,6 +244,65 @@ export const AutoModView: React.FC<AutoModViewProps> = ({ guild, onSaveAutoMod, 
           {testResult && (
             <div className="p-3 rounded-lg bg-[#0B0D12] border border-slate-800 text-xs font-mono-tabular text-amber-300">
               {testResult}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* False-Positive Reports */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <form onSubmit={handleReportFp} className="lg:col-span-5 rounded-xl border border-slate-800 bg-[#121620] p-6 space-y-4">
+          <h3 className="font-display text-lg font-semibold text-slate-100">Report False Positive</h3>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Rule Hit</label>
+            <input value={fpRule} onChange={(e) => setFpRule(e.target.value)} required className="w-full px-3 py-2 rounded-lg bg-[#0B0D12] border border-slate-800 text-sm" />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Notes</label>
+            <input value={fpNotes} onChange={(e) => setFpNotes(e.target.value)} placeholder="Why was this message legitimate?" className="w-full px-3 py-2 rounded-lg bg-[#0B0D12] border border-slate-800 text-sm" />
+          </div>
+          <button type="submit" className="px-4 py-2 rounded-lg border border-slate-700 bg-[#171C28] hover:bg-[#1E2535] text-sm font-medium text-slate-200 cursor-pointer">
+            Submit Report for Excerpt Above
+          </button>
+        </form>
+
+        <div className="lg:col-span-7 rounded-xl border border-slate-800 bg-[#121620] p-6 space-y-3">
+          <h3 className="font-display text-lg font-semibold text-slate-100">
+            False-Positive Triage ({(guild.falsePositiveReports ?? []).length})
+          </h3>
+          {(guild.falsePositiveReports ?? []).length === 0 ? (
+            <p className="text-xs text-slate-400">No false-positive reports submitted.</p>
+          ) : (
+            <div className="divide-y divide-slate-800/70">
+              {guild.falsePositiveReports.map((fp) => (
+                <div key={fp.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-mono-tabular text-amber-300">
+                      #{fp.channelName} · {fp.ruleHits.join(', ') || 'rule'} · {fp.status}
+                    </p>
+                    <p className="text-sm text-slate-200 truncate">{fp.sampleContent}</p>
+                    <p className="text-xs text-slate-400">{fp.notes} — by {fp.reporterUsername}</p>
+                  </div>
+                  {fp.status === 'open' && (
+                    <div className="flex gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => onResolveFalsePositive(fp.id, 'resolved').catch((err) => setError(err.message))}
+                        className="px-2.5 py-1 rounded border border-emerald-500/40 bg-emerald-950/30 text-emerald-300 text-xs cursor-pointer"
+                      >
+                        Resolve
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onResolveFalsePositive(fp.id, 'dismissed').catch((err) => setError(err.message))}
+                        className="px-2.5 py-1 rounded border border-slate-700 text-slate-300 text-xs cursor-pointer"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </div>

@@ -24,6 +24,8 @@ import {
   appealReviewSchema,
   automodUpdateSchema,
   commandExecuteSchema,
+  customResponseCreateSchema,
+  falsePositiveCreateSchema,
   languageCreateSchema,
   languageReviewSchema,
   memberUpdateSchema,
@@ -40,6 +42,11 @@ import {
 import { ShadowSlayersBotClient } from './apps/bot/src/index.ts';
 import { SLASH_COMMANDS, executeSlashCommand } from './apps/bot/src/commands/registry.ts';
 import { RuleBasedAutoModEngine } from './apps/bot/src/services/automod.ts';
+import {
+  applyRulesVerificationReaction,
+  computeMemberOnboardingStatus,
+  grantActivePlayerRecruit,
+} from './apps/bot/src/services/onboarding.ts';
 import { PersistentTaskScheduler } from './apps/bot/src/services/scheduler.ts';
 
 interface AuthenticatedRequest extends Request {
@@ -521,6 +528,7 @@ async function bootstrap() {
           appliedCount: liveReport.appliedCount,
           failedCount: liveReport.failedCount,
           skippedConflicts: liveReport.skippedConflicts,
+          skippedManualItems: liveReport.skippedManualItems,
           failures: liveReport.failures,
         },
       });
@@ -584,7 +592,9 @@ async function bootstrap() {
         rankOrder: 0,
         position: 0,
         permissionsBitfield: '0',
-        colorHex: '#0EA5E9',
+        intendedPermissions: [],
+        colorHex: null,
+        hoist: null,
         selfAssignable: true,
         exclusiveGroupId: guild.onboarding.allowMultipleLanguages ? null : 'language_exclusive',
         discoveredFromExisting: false,
@@ -746,6 +756,7 @@ async function bootstrap() {
           categoryId: existingCategory.id,
           topic: `${lang.nativeName} ${ch.key} channel`,
           isPrivateLeadership: false,
+          readOnlyForMembers: ch.readOnly,
           accessClassification: 'verified_member',
           languageCode: code,
           mappedRolePurpose: ch.key,
@@ -918,6 +929,166 @@ async function bootstrap() {
     res.json({ panel, liveDiscord: Boolean(liveGuild) });
   });
 
+  // Rules Gate Publishing & 5-Step Onboarding Status / Actions
+  app.post('/api/guild/:guildId/rules/publish', requireAuth('roles.publish'), async (req: AuthenticatedRequest, res) => {
+    const guild = await db.getGuild(req.params.guildId);
+    if (!guild) {
+      res.status(404).json({ error: 'Guild not found' });
+      return;
+    }
+
+    const liveGuild = botClient.getLiveDiscordGuild();
+    let publishedMessageId: string | null = guild.onboarding.rulesMessageId;
+    if (liveGuild) {
+      const pubRes = await botClient.publishRulesToDiscord(liveGuild, {
+        channelName: guild.onboarding.rulesChannelName,
+        title: guild.onboarding.rulesTitle,
+        body: guild.onboarding.rulesBody,
+        reactionEmoji: guild.onboarding.rulesReactionEmoji || '✅',
+      });
+      if (!pubRes.ok) {
+        res.status(502).json({ error: pubRes.error || 'Discord failed to publish rules message.' });
+        return;
+      }
+      publishedMessageId = pubRes.messageId ?? null;
+    }
+
+    const now = new Date().toISOString();
+    guild.onboarding.rulesMessageId = publishedMessageId;
+    guild.onboarding.rulesPublishedAt = now;
+    await db.saveGuild(guild);
+    await recordDashboardAudit(
+      guild.guildId,
+      req.sessionUser!,
+      'config_change',
+      guild.guildId,
+      guild.onboarding.rulesChannelName,
+      `Published rules verification gate to #${guild.onboarding.rulesChannelName} (liveDiscord=${Boolean(liveGuild)}).`,
+    );
+    res.json({ onboarding: guild.onboarding, liveDiscord: Boolean(liveGuild) });
+  });
+
+  app.get('/api/guild/:guildId/onboarding', requireAuth('overview.view'), async (req: AuthenticatedRequest, res) => {
+    const guild = await db.getGuild(req.params.guildId);
+    if (!guild) {
+      res.status(404).json({ error: 'Guild not found' });
+      return;
+    }
+
+    const liveGuild = botClient.getLiveDiscordGuild();
+    const statuses = await Promise.all(
+      guild.members.map(async (member) => {
+        let liveRoleNames: string[] | null = null;
+        if (liveGuild) {
+          const liveMember = await liveGuild.members.fetch(member.userId).catch(() => null);
+          if (liveMember) {
+            liveRoleNames = [...liveMember.roles.cache.values()].map((r) => r.name);
+          }
+        }
+        const rec = guild.onboardingRecords.find((r) => r.userId === member.userId) ?? null;
+        return computeMemberOnboardingStatus(member, liveRoleNames, rec);
+      }),
+    );
+
+    res.json({
+      onboarding: guild.onboarding,
+      statuses,
+      liveDiscord: Boolean(liveGuild),
+    });
+  });
+
+  app.post('/api/guild/:guildId/onboarding/:userId/verify-rules', requireAuth('members.edit'), async (req: AuthenticatedRequest, res) => {
+    const guild = await db.getGuild(req.params.guildId);
+    const member = guild?.members.find((m) => m.userId === req.params.userId);
+    if (!guild || !member) {
+      res.status(404).json({ error: 'Member not found' });
+      return;
+    }
+    const added = req.body?.verified !== false;
+    const outcome = applyRulesVerificationReaction(guild, {
+      userId: member.userId,
+      username: member.username,
+      added,
+    });
+
+    const liveGuild = botClient.getLiveDiscordGuild();
+    if (liveGuild && added) {
+      const grantRes = await botClient.grantRoleOnDiscord(
+        liveGuild,
+        member.userId,
+        guild.onboarding.verifiedRoleName || '✅ Verified',
+        `Dashboard rules verification by ${req.sessionUser!.username}`,
+      );
+      if (!grantRes.ok) {
+        res.status(502).json({ error: grantRes.error || 'Failed to assign ✅ Verified on Discord.' });
+        return;
+      }
+    }
+
+    await db.saveGuild(guild);
+    await recordDashboardAudit(
+      guild.guildId,
+      req.sessionUser!,
+      'role_change',
+      member.userId,
+      member.username,
+      `${added ? 'Verified' : 'Revoked'} rules acceptance (✅ Verified) for ${member.username}; unrelated roles preserved.`,
+    );
+    res.json({ member, record: outcome.record, verified: outcome.verified });
+  });
+
+  app.post('/api/guild/:guildId/onboarding/:userId/active-player', requireAuth('members.edit'), async (req: AuthenticatedRequest, res) => {
+    const guild = await db.getGuild(req.params.guildId);
+    const member = guild?.members.find((m) => m.userId === req.params.userId);
+    if (!guild || !member) {
+      res.status(404).json({ error: 'Member not found' });
+      return;
+    }
+
+    const liveGuild = botClient.getLiveDiscordGuild();
+    let liveRoleNames: string[] | null = null;
+    if (liveGuild) {
+      const liveMember = await liveGuild.members.fetch(member.userId).catch(() => null);
+      if (liveMember) {
+        liveRoleNames = [...liveMember.roles.cache.values()].map((r) => r.name);
+      }
+    }
+
+    const result = grantActivePlayerRecruit(guild, {
+      userId: member.userId,
+      username: member.username,
+      actualDiscordRoleNames: liveRoleNames,
+    });
+    if (!result.ok) {
+      res.status(400).json({ error: result.reason, status: result.status });
+      return;
+    }
+
+    if (liveGuild && result.grantedRole) {
+      const grantRes = await botClient.grantRoleOnDiscord(
+        liveGuild,
+        member.userId,
+        result.grantedRole,
+        `Active-player onboarding confirmed by ${req.sessionUser!.username}`,
+      );
+      if (!grantRes.ok) {
+        res.status(502).json({ error: grantRes.error || 'Discord failed to grant 🌱 Recruit.' });
+        return;
+      }
+    }
+
+    await db.saveGuild(guild);
+    await recordDashboardAudit(
+      guild.guildId,
+      req.sessionUser!,
+      'role_change',
+      member.userId,
+      member.username,
+      result.reason,
+    );
+    res.json({ ok: true, reason: result.reason, status: result.status, member });
+  });
+
   // Moderation & Appeals
   app.post('/api/guild/:guildId/moderation', requireAuth('moderation.execute'), async (req: AuthenticatedRequest, res) => {
     const parsed = moderationActionSchema.safeParse(req.body);
@@ -950,7 +1121,7 @@ async function bootstrap() {
         targetUserId: parsed.data.targetUserId,
         reason: parsed.data.reason,
         durationMinutes,
-        channelName: parsed.data.channelName ?? 'common-hall',
+        channelName: parsed.data.channelName ?? '💬・general-chat',
       });
       if (execRes.ok) {
         discordExecutionStatus = 'verified_live';
@@ -1102,11 +1273,123 @@ async function bootstrap() {
       userId: 'sim-test-user',
       username: String(req.body?.username || 'TestRecruit'),
       content: String(req.body?.content || ''),
-      channelName: String(req.body?.channelName || 'common-hall'),
+      channelName: String(req.body?.channelName || '💬・general-chat'),
       userRoles: Array.isArray(req.body?.userRoles) ? req.body.userRoles : ['🌱 Recruit'],
       mentionCount: Number(req.body?.mentionCount || 0),
     });
     res.json({ evaluation });
+  });
+
+  // AutoMod False-Positive Reports
+  app.post('/api/guild/:guildId/automod/false-positives', requireAuth('overview.view'), async (req: AuthenticatedRequest, res) => {
+    const parsed = falsePositiveCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid false-positive report payload' });
+      return;
+    }
+    const guild = await db.getGuild(req.params.guildId);
+    if (!guild) {
+      res.status(404).json({ error: 'Guild not found' });
+      return;
+    }
+    const report = {
+      id: `fp-${Date.now()}`,
+      reporterUserId: req.sessionUser!.userId,
+      reporterUsername: req.sessionUser!.username,
+      channelName: parsed.data.channelName,
+      sampleContent: parsed.data.sampleContent,
+      ruleHits: parsed.data.ruleHits,
+      notes: parsed.data.notes,
+      status: 'open' as const,
+      reviewedBy: null,
+      reviewedAt: null,
+      createdAt: new Date().toISOString(),
+    };
+    guild.falsePositiveReports.unshift(report);
+    await db.saveGuild(guild);
+    await recordDashboardAudit(
+      guild.guildId,
+      req.sessionUser!,
+      'automod',
+      report.id,
+      report.ruleHits.join(', ') || 'automod',
+      `Submitted AutoMod false-positive report in #${report.channelName}.`,
+    );
+    res.status(201).json({ report });
+  });
+
+  app.patch('/api/guild/:guildId/automod/false-positives/:id', requireAuth('automod.manage'), async (req: AuthenticatedRequest, res) => {
+    const guild = await db.getGuild(req.params.guildId);
+    const report = guild?.falsePositiveReports.find((r) => r.id === req.params.id);
+    if (!guild || !report) {
+      res.status(404).json({ error: 'False-positive report not found' });
+      return;
+    }
+    const status = req.body?.status === 'dismissed' ? 'dismissed' : 'resolved';
+    report.status = status;
+    report.reviewedBy = req.sessionUser!.username;
+    report.reviewedAt = new Date().toISOString();
+    await db.saveGuild(guild);
+    await recordDashboardAudit(
+      guild.guildId,
+      req.sessionUser!,
+      'automod',
+      report.id,
+      report.ruleHits.join(', ') || 'automod',
+      `Marked AutoMod false-positive report ${report.id} as ${status}.`,
+    );
+    res.json({ report });
+  });
+
+  // Deterministic Custom Responses (Zero AI)
+  app.post('/api/guild/:guildId/custom-responses', requireAuth('community.manage'), async (req: AuthenticatedRequest, res) => {
+    const parsed = customResponseCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid custom response payload' });
+      return;
+    }
+    const guild = await db.getGuild(req.params.guildId);
+    if (!guild) {
+      res.status(404).json({ error: 'Guild not found' });
+      return;
+    }
+    const rule = {
+      id: `cr-${Date.now()}`,
+      trigger: parsed.data.trigger,
+      matchMode: parsed.data.matchMode,
+      response: parsed.data.response,
+      enabled: true,
+      languageCode: parsed.data.languageCode ?? null,
+      createdBy: req.sessionUser!.username,
+      createdAt: new Date().toISOString(),
+    };
+    guild.customResponses.unshift(rule);
+    await db.saveGuild(guild);
+    await recordDashboardAudit(
+      guild.guildId,
+      req.sessionUser!,
+      'config_change',
+      rule.id,
+      rule.trigger,
+      `Added deterministic custom response for "${rule.trigger}" (${rule.matchMode}).`,
+    );
+    res.status(201).json({ rule });
+  });
+
+  app.delete('/api/guild/:guildId/custom-responses/:id', requireAuth('community.manage'), async (req: AuthenticatedRequest, res) => {
+    const guild = await db.getGuild(req.params.guildId);
+    if (!guild) {
+      res.status(404).json({ error: 'Guild not found' });
+      return;
+    }
+    const before = guild.customResponses.length;
+    guild.customResponses = guild.customResponses.filter((r) => r.id !== req.params.id);
+    if (guild.customResponses.length === before) {
+      res.status(404).json({ error: 'Custom response not found' });
+      return;
+    }
+    await db.saveGuild(guild);
+    res.json({ removed: true });
   });
 
   // Logging Config

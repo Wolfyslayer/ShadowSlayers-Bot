@@ -6,14 +6,22 @@ import {
   hasCapability,
   type PermissionCapability,
 } from '../../../../packages/permissions/src/hierarchy.ts';
-import type { ClanRankName, GuildState, ModerationActionType, RolePanel } from '../../../../packages/shared/src/types.ts';
+import type {
+  ClanRankName,
+  GuildState,
+  ModerationActionType,
+  RolePanel,
+} from '../../../../packages/shared/src/types.ts';
 import { formatLocalizedString } from '../../../../packages/localization/src/engine.ts';
+import { RuleBasedAutoModEngine } from '../services/automod.ts';
+import { computeMemberOnboardingStatus, grantActivePlayerRecruit } from '../services/onboarding.ts';
 
 export type CommandCategory =
   | 'General'
   | 'Setup & Administration'
   | 'Roles'
   | 'Moderation'
+  | 'AutoMod'
   | 'Community'
   | 'Recruitment'
   | 'Support'
@@ -36,6 +44,15 @@ export interface DiscordCommandExecutor {
     channelName: string;
   }) => Promise<{ ok: boolean; error?: string }>;
   publishRolePanel?: (panel: RolePanel) => Promise<{ ok: boolean; error?: string }>;
+  publishRulesMessage?: (params: {
+    channelName: string;
+    title: string;
+    body: string;
+    reactionEmoji: string;
+  }) => Promise<{ ok: boolean; messageId?: string; error?: string }>;
+  grantDiscordRole?: (params: { userId: string; roleName: string; reason: string }) => Promise<{ ok: boolean; error?: string }>;
+  getLiveMemberRoleNames?: (userId: string) => Promise<string[] | null>;
+  getBotRuntimeSummary?: () => { connected: boolean; mode: string; botTag: string | null; guildCount: number };
 }
 
 export interface CommandExecutionContext {
@@ -57,32 +74,46 @@ export interface CommandExecutionResult {
   data?: Record<string, unknown>;
 }
 
+const DESTRUCTIVE_MOD_ACTIONS = new Set<ModerationActionType>(['ban', 'kick', 'purge']);
+
 export const SLASH_COMMANDS: CommandDescriptor[] = [
   // General
   { name: 'help', category: 'General', description: 'List categorized ShadowSlayers commands', requiredCapability: 'overview.view', optionsSummary: ['category?'] },
   { name: 'about', category: 'General', description: 'Show platform architecture and realm details', requiredCapability: 'overview.view', optionsSummary: [] },
+  { name: 'bot-status', category: 'General', description: 'Check bot gateway, database, and module operational status', requiredCapability: 'overview.view', optionsSummary: [] },
   { name: 'profile', category: 'General', description: 'Inspect member XP, level, clan rank, and languages', requiredCapability: 'overview.view', optionsSummary: ['member?'] },
+  { name: 'userinfo', category: 'General', description: 'Inspect member roles, verification, and onboarding state', requiredCapability: 'overview.view', optionsSummary: ['member?'] },
+  { name: 'avatar', category: 'General', description: 'Display member avatar URL and identity badge', requiredCapability: 'overview.view', optionsSummary: ['member?'] },
   { name: 'server', category: 'General', description: 'Display discovered server categories and role summary', requiredCapability: 'overview.view', optionsSummary: [] },
+  { name: 'serverinfo', category: 'General', description: 'Show detailed ShadowSlayers server structure and member counts', requiredCapability: 'overview.view', optionsSummary: [] },
   { name: 'language', category: 'General', description: 'Toggle or view your independent language roles', requiredCapability: 'overview.view', optionsSummary: ['code?'] },
+  { name: 'onboarding', category: 'General', description: 'Inspect 5-step onboarding status or claim 🌱 Recruit when eligible', requiredCapability: 'overview.view', optionsSummary: ['member?', 'action?'] },
   { name: 'modules', category: 'General', description: 'List enabled and disabled bot modules', requiredCapability: 'overview.view', optionsSummary: [] },
   { name: 'dashboard', category: 'General', description: 'Get the administration dashboard link', requiredCapability: 'overview.view', optionsSummary: [] },
   // Setup & Administration
   { name: 'setup', category: 'Setup & Administration', description: 'Run non-destructive server discovery & diff preview', requiredCapability: 'discovery.apply', optionsSummary: ['confirm?'] },
   { name: 'config', category: 'Setup & Administration', description: 'View or toggle core guild module settings', requiredCapability: 'settings.manage', optionsSummary: ['module?', 'enabled?'] },
   { name: 'permissions', category: 'Setup & Administration', description: 'Inspect clan rank hierarchy and permissions', requiredCapability: 'discovery.view', optionsSummary: [] },
+  { name: 'permissions preview', category: 'Setup & Administration', description: 'Preview permission audit differences, read-only guards, and Inner Sanctum isolation', requiredCapability: 'discovery.view', optionsSummary: [] },
+  { name: 'rules publish', category: 'Setup & Administration', description: 'Publish localized rules embed & ✅ reaction gate to 📜・rules', requiredCapability: 'roles.publish', optionsSummary: ['channel?'] },
+  { name: 'custom-response', category: 'Setup & Administration', description: 'List or add deterministic keyword custom responses', requiredCapability: 'community.manage', optionsSummary: ['action?', 'trigger?', 'response?'] },
   // Roles
   { name: 'roles', category: 'Roles', description: 'List configured role panels and role groups', requiredCapability: 'roles.view', optionsSummary: [] },
   { name: 'roles publish', category: 'Roles', description: 'Publish a configured role-selection panel only (never server setup)', requiredCapability: 'roles.publish', optionsSummary: ['panelId'] },
+  // AutoMod
+  { name: 'automod status', category: 'AutoMod', description: 'Display deterministic AutoMod rules, lockdown, and false-positive queue', requiredCapability: 'moderation.view', optionsSummary: [] },
+  { name: 'automod test', category: 'AutoMod', description: 'Test a sample message against deterministic AutoMod rules', requiredCapability: 'automod.manage', optionsSummary: ['content', 'channel?'] },
+  { name: 'false-positive', category: 'AutoMod', description: 'Report an AutoMod false-positive match for moderator review', requiredCapability: 'overview.view', optionsSummary: ['channel', 'content', 'notes'] },
   // Moderation
   { name: 'warn', category: 'Moderation', description: 'Issue a warning and create a moderation case', requiredCapability: 'moderation.execute', optionsSummary: ['member', 'reason'] },
   { name: 'warnings', category: 'Moderation', description: 'List warnings for a target member', requiredCapability: 'moderation.view', optionsSummary: ['member'] },
   { name: 'timeout', category: 'Moderation', description: 'Timeout a member for N minutes', requiredCapability: 'moderation.execute', optionsSummary: ['member', 'minutes', 'reason'] },
   { name: 'untimeout', category: 'Moderation', description: 'Remove an active timeout', requiredCapability: 'moderation.execute', optionsSummary: ['member', 'reason'] },
-  { name: 'kick', category: 'Moderation', description: 'Kick a member with logged reason', requiredCapability: 'moderation.execute', optionsSummary: ['member', 'reason'] },
-  { name: 'ban', category: 'Moderation', description: 'Permanently ban a member with logged case', requiredCapability: 'moderation.execute', optionsSummary: ['member', 'reason'] },
+  { name: 'kick', category: 'Moderation', description: 'Kick a member with logged reason and confirmation check', requiredCapability: 'moderation.execute', optionsSummary: ['member', 'reason', 'confirmed?'] },
+  { name: 'ban', category: 'Moderation', description: 'Permanently ban a member with logged case and confirmation check', requiredCapability: 'moderation.execute', optionsSummary: ['member', 'reason', 'confirmed?'] },
   { name: 'tempban', category: 'Moderation', description: 'Temporarily ban a member and schedule unban', requiredCapability: 'moderation.execute', optionsSummary: ['member', 'minutes', 'reason'] },
   { name: 'unban', category: 'Moderation', description: 'Revoke a ban by user ID', requiredCapability: 'moderation.execute', optionsSummary: ['userId', 'reason'] },
-  { name: 'purge', category: 'Moderation', description: 'Bulk remove messages with audit record', requiredCapability: 'moderation.execute', optionsSummary: ['count', 'channel?'] },
+  { name: 'purge', category: 'Moderation', description: 'Bulk remove messages with audit record and confirmation check', requiredCapability: 'moderation.execute', optionsSummary: ['count', 'channel?', 'confirmed?'] },
   { name: 'slowmode', category: 'Moderation', description: 'Set channel slowmode seconds', requiredCapability: 'moderation.execute', optionsSummary: ['seconds', 'channel?'] },
   { name: 'lock', category: 'Moderation', description: 'Lock a channel against regular member messages', requiredCapability: 'moderation.execute', optionsSummary: ['channel', 'reason'] },
   { name: 'unlock', category: 'Moderation', description: 'Unlock a previously locked channel', requiredCapability: 'moderation.execute', optionsSummary: ['channel', 'reason'] },
@@ -130,7 +161,10 @@ export async function executeSlashCommand(
   commandName: string,
   ctx: CommandExecutionContext,
 ): Promise<CommandExecutionResult> {
-  const normalized = commandName.trim().toLowerCase().replace(/^\//, '');
+  let normalized = commandName.trim().toLowerCase().replace(/^\//, '');
+  if (normalized === 'roles list') normalized = 'roles';
+  if (normalized === 'permissions matrix') normalized = 'permissions';
+
   const descriptor = SLASH_COMMANDS.find((c) => c.name === normalized);
 
   if (!descriptor) {
@@ -183,12 +217,44 @@ export async function executeSlashCommand(
         },
       };
 
+    case 'bot-status': {
+      const runtime = ctx.discordExecutor?.getBotRuntimeSummary?.() ?? {
+        connected: false,
+        mode: 'standby_no_token',
+        botTag: null,
+        guildCount: 0,
+      };
+      const mappedRoles = guild.discovery.roles.filter((r) => r.lifecycleState === 'mapped').length;
+      const mappedCats = guild.discovery.categories.filter((c) => c.lifecycleState === 'mapped').length;
+      return {
+        ok: true,
+        title: 'ShadowSlayers Bot Status',
+        message: `Gateway: ${runtime.connected ? `Connected (${runtime.botTag})` : `Standby (${runtime.mode})`} | Mapped: ${mappedRoles}/16 roles, ${mappedCats}/9 categories | Pending Tasks: ${guild.scheduledTasks.filter((t) => t.status === 'pending').length}`,
+        data: {
+          runtime,
+          mappedRoles,
+          mappedCats,
+          permissionDiffs: guild.discovery.permissionDifferences.length,
+        },
+      };
+    }
+
     case 'server':
+    case 'serverinfo': {
+      const textCount = guild.discovery.categories.reduce(
+        (acc, c) => acc + c.channels.filter((ch) => ch.type !== 'voice').length,
+        0,
+      );
+      const voiceCount = guild.discovery.categories.reduce(
+        (acc, c) => acc + c.channels.filter((ch) => ch.type === 'voice').length,
+        0,
+      );
       return {
         ok: true,
         title: guild.guildName,
-        message: `${guild.discovery.categories.length} categories, ${guild.discovery.roles.length} roles, ${guild.members.filter((m) => !m.isDeparted).length} active tracked members.`,
+        message: `${guild.discovery.categories.length} categories, ${textCount} text / ${voiceCount} voice channels, ${guild.discovery.roles.length} roles, ${guild.members.filter((m) => !m.isDeparted).length} active tracked members.`,
       };
+    }
 
     case 'modules':
       return {
@@ -206,15 +272,107 @@ export async function executeSlashCommand(
         message: 'Access the ShadowSlayers web console at the configured APP_URL. Privileged actions require Discord OAuth2 or verified Shadow King session.',
       };
 
-    case 'profile': {
+    case 'profile':
+    case 'userinfo': {
+      const targetName = String(ctx.args.member || ctx.actorUsername).toLowerCase();
+      const member =
+        guild.members.find((m) => m.username.toLowerCase() === targetName || m.userId === targetName) ??
+        guild.members[0];
+      const liveRoles = ctx.discordExecutor?.getLiveMemberRoleNames
+        ? await ctx.discordExecutor.getLiveMemberRoleNames(member.userId)
+        : null;
+      const onbRec = guild.onboardingRecords.find((r) => r.userId === member.userId);
+      const onb = computeMemberOnboardingStatus(member, liveRoles, onbRec);
+      return {
+        ok: true,
+        title: `${member.displayName} (${onb.currentClanRank ?? 'Unranked'})`,
+        message: `Verified: ${onb.step1RulesVerified ? '✅' : 'No'} | Level ${member.level} (${member.xp} XP) | Languages: ${member.languageCodes.join(', ') || 'none'} | Class: ${member.gamingClasses.join(', ') || 'unassigned'} | Onboarding: ${onb.completed ? 'Complete' : `${4 - onb.missingSteps.length}/4 required steps`}`,
+        data: { onboarding: onb },
+      };
+    }
+
+    case 'avatar': {
       const targetName = String(ctx.args.member || ctx.actorUsername).toLowerCase();
       const member =
         guild.members.find((m) => m.username.toLowerCase() === targetName || m.userId === targetName) ??
         guild.members[0];
       return {
         ok: true,
-        title: `${member.displayName} (${member.clanRank})`,
-        message: `Level ${member.level} (${member.xp} XP) | Languages: ${member.languageCodes.join(', ') || 'none'} | Classes: ${member.gamingClasses.join(', ') || 'unassigned'}`,
+        title: `Avatar for ${member.displayName}`,
+        message: member.avatarUrl ? `Avatar URL: ${member.avatarUrl}` : `${member.username} is using their default Discord avatar.`,
+        data: { avatarUrl: member.avatarUrl },
+      };
+    }
+
+    case 'onboarding': {
+      const action = String(ctx.args.action || 'status').toLowerCase();
+      const targetName = String(ctx.args.member || ctx.actorUsername).toLowerCase();
+      const member =
+        guild.members.find((m) => m.username.toLowerCase() === targetName || m.userId === targetName) ??
+        guild.members.find((m) => m.userId === ctx.actorUserId) ??
+        guild.members[0];
+
+      const liveRoles = ctx.discordExecutor?.getLiveMemberRoleNames
+        ? await ctx.discordExecutor.getLiveMemberRoleNames(member.userId)
+        : null;
+
+      if (action === 'active_player' || action === 'claim_recruit') {
+        const res = grantActivePlayerRecruit(guild, {
+          userId: member.userId,
+          username: member.username,
+          actualDiscordRoleNames: liveRoles,
+          nowIso: now,
+        });
+        if (res.ok && res.grantedRole && ctx.discordExecutor?.grantDiscordRole) {
+          const roleRes = await ctx.discordExecutor.grantDiscordRole({
+            userId: member.userId,
+            roleName: res.grantedRole,
+            reason: 'Step 5 active-player onboarding completion',
+          });
+          if (!roleRes.ok) {
+            return {
+              ok: false,
+              title: 'Discord Role Grant Failed',
+              message: roleRes.error || 'Could not assign 🌱 Recruit role on Discord.',
+            };
+          }
+        }
+        if (res.ok) {
+          await ctx.db.saveGuild(guild);
+          await ctx.db.appendAuditLog(guild.guildId, {
+            id: `log-onb-${Date.now()}`,
+            guildId: guild.guildId,
+            category: 'role_change',
+            actorId: ctx.actorUserId,
+            actorName: ctx.actorUsername,
+            targetId: member.userId,
+            targetName: member.username,
+            summary: res.reason,
+            details: { grantedRole: res.grantedRole },
+            createdAt: now,
+          });
+        }
+        return {
+          ok: res.ok,
+          title: res.ok ? 'Active-Player Onboarding Updated' : 'Onboarding Requirements Incomplete',
+          message: res.reason,
+          data: { status: res.status },
+        };
+      }
+
+      const onbRec = guild.onboardingRecords.find((r) => r.userId === member.userId);
+      const status = computeMemberOnboardingStatus(member, liveRoles, onbRec);
+      return {
+        ok: true,
+        title: `Onboarding Status — ${member.username}`,
+        message: [
+          `1. Rules (✅ Verified): ${status.step1RulesVerified ? 'Done' : 'Pending'}`,
+          `2. Language: ${status.step2LanguageSelected ?? 'Pending'}`,
+          `3. Class: ${status.step3ClassSelected ?? 'Pending'}`,
+          `4. Notifications (optional): ${status.step4NotificationsCount}`,
+          `5. Clan Rank (🌱 Recruit): ${status.currentClanRank ?? 'Pending'}`,
+        ].join(' | '),
+        data: { status },
       };
     }
 
@@ -258,10 +416,30 @@ export async function executeSlashCommand(
         (c) => c.status === 'proposed' || c.status === 'missing' || c.status === 'failed',
       ).length;
       const conflicts = guild.discovery.proposedChanges.filter((c) => c.status === 'conflicting').length;
+      const manual = guild.discovery.proposedChanges.filter((c) => c.status === 'requires_manual_setup').length;
       return {
         ok: true,
         title: 'Non-Destructive Discovery Preview',
-        message: `${guild.discovery.categories.length} categories & ${guild.discovery.roles.length} roles scanned. Pending additive items: ${pending}, conflicts requiring manual resolution: ${conflicts}.`,
+        message: `${guild.discovery.categories.length} categories & ${guild.discovery.roles.length} roles scanned. Pending additive: ${pending}, manual review/misplaced/type diffs: ${manual}, conflicts: ${conflicts}.`,
+      };
+    }
+
+    case 'config': {
+      const modKey = String(ctx.args.module || '').trim() as keyof GuildState['modules'];
+      if (!modKey || !(modKey in guild.modules)) {
+        return {
+          ok: true,
+          title: 'Guild Configuration',
+          message: `Modules: ${Object.entries(guild.modules).map(([k, v]) => `${k}=${v}`).join(', ')}`,
+        };
+      }
+      const nextEnabled = typeof ctx.args.enabled === 'boolean' ? ctx.args.enabled : !guild.modules[modKey];
+      guild.modules[modKey] = nextEnabled;
+      await ctx.db.saveGuild(guild);
+      return {
+        ok: true,
+        title: 'Module Configuration Updated',
+        message: `Module "${modKey}" is now ${nextEnabled ? 'enabled' : 'disabled'}.`,
       };
     }
 
@@ -272,6 +450,92 @@ export async function executeSlashCommand(
         message:
           '👑 Shadow King > 🛡️ Shadow Council > ⚔️ Warlord > 🔥 Elite Warrior > 🖤 ShadowSlayer > 🌱 Recruit. Language, class, and notification roles carry zero moderation authority.',
       };
+
+    case 'permissions preview': {
+      const diffs = guild.discovery.permissionDifferences;
+      const roCount = guild.discovery.categories.flatMap((c) => c.channels).filter((ch) => ch.readOnlyForMembers).length;
+      return {
+        ok: true,
+        title: 'Permission Policy & Diff Preview',
+        message:
+          diffs.length === 0
+            ? `No permission policy violations detected across discovered channels (${roCount} read-only channel policy checks configured).`
+            : `${diffs.length} permission difference(s) detected: ${diffs.slice(0, 4).map((d) => d.summary).join(' | ')}`,
+        data: { differences: diffs },
+      };
+    }
+
+    case 'rules publish': {
+      const targetChannel = String(ctx.args.channel || guild.onboarding.rulesChannelName || '📜・rules');
+      if (ctx.discordExecutor?.publishRulesMessage) {
+        const res = await ctx.discordExecutor.publishRulesMessage({
+          channelName: targetChannel,
+          title: guild.onboarding.rulesTitle,
+          body: guild.onboarding.rulesBody,
+          reactionEmoji: guild.onboarding.rulesReactionEmoji || '✅',
+        });
+        if (!res.ok) {
+          return {
+            ok: false,
+            title: 'Rules Publish Failed',
+            message: res.error || `Could not publish rules message to #${targetChannel}.`,
+          };
+        }
+        if (res.messageId) guild.onboarding.rulesMessageId = res.messageId;
+      }
+      guild.onboarding.rulesPublishedAt = now;
+      await ctx.db.saveGuild(guild);
+      await ctx.db.appendAuditLog(guild.guildId, {
+        id: `log-rulespub-${Date.now()}`,
+        guildId: guild.guildId,
+        category: 'config_change',
+        actorId: ctx.actorUserId,
+        actorName: ctx.actorUsername,
+        targetId: targetChannel,
+        targetName: targetChannel,
+        summary: `Executed /rules publish to #${targetChannel} (reaction gate ${guild.onboarding.rulesReactionEmoji}; zero server setup changes).`,
+        details: { liveDiscord: Boolean(ctx.discordExecutor?.publishRulesMessage), rulesMessageId: guild.onboarding.rulesMessageId },
+        createdAt: now,
+      });
+      return {
+        ok: true,
+        title: 'Rules Gate Published',
+        message: ctx.discordExecutor?.publishRulesMessage
+          ? `Published rules & ${guild.onboarding.rulesReactionEmoji} reaction verification to #${targetChannel}.`
+          : `Rules publication saved for #${targetChannel} (Discord Gateway standby — will post once connected).`,
+      };
+    }
+
+    case 'custom-response': {
+      const action = String(ctx.args.action || 'list').toLowerCase();
+      if (action === 'add') {
+        const trigger = String(ctx.args.trigger || '').trim();
+        const response = String(ctx.args.response || '').trim();
+        if (!trigger || !response) {
+          return { ok: false, title: 'Missing Arguments', message: 'Provide both trigger and response text.' };
+        }
+        guild.customResponses.unshift({
+          id: `cr-${Date.now()}`,
+          trigger,
+          matchMode: 'contains',
+          response,
+          enabled: true,
+          languageCode: null,
+          createdBy: ctx.actorUsername,
+          createdAt: now,
+        });
+        await ctx.db.saveGuild(guild);
+        return { ok: true, title: 'Custom Response Added', message: `Trigger "${trigger}" saved (deterministic match, no AI).` };
+      }
+      return {
+        ok: true,
+        title: `Custom Responses (${guild.customResponses.length})`,
+        message:
+          guild.customResponses.length === 0
+            ? 'No custom responses configured yet.'
+            : guild.customResponses.map((r) => `[${r.enabled ? 'ON' : 'OFF'}] "${r.trigger}" -> ${r.response.slice(0, 60)}`).join(' | '),
+      };
+    }
 
     case 'roles':
       return {
@@ -326,6 +590,81 @@ export async function executeSlashCommand(
       };
     }
 
+    case 'automod status': {
+      const openFp = guild.falsePositiveReports.filter((r) => r.status === 'open').length;
+      return {
+        ok: true,
+        title: 'Deterministic AutoMod Status',
+        message: `Enabled: ${guild.automod.enabled} | Emergency Lockdown: ${guild.automod.emergencyLockdown} | Invites Blocked: ${guild.automod.blockDiscordInvites} | Phishing Links: ${guild.automod.blockSuspiciousLinks} | Open False Positives: ${openFp} | Never Auto-Permaban: ${guild.automod.neverAutoPermaban}`,
+      };
+    }
+
+    case 'automod test': {
+      const engine = new RuleBasedAutoModEngine();
+      const content = String(ctx.args.content || 'Check this sample message');
+      const ch = String(ctx.args.channel || ctx.channelName || '💬・general-chat');
+      const res = engine.evaluateMessage(guild.automod, {
+        userId: 'sim-test',
+        username: ctx.actorUsername,
+        content,
+        channelName: ch,
+        userRoles: ['🌱 Recruit'],
+        mentionCount: Number(ctx.args.mentions || 0),
+      });
+      return {
+        ok: true,
+        title: 'AutoMod Rule Evaluation',
+        message: res.exempt
+          ? `Channel #${ch} is exempt.`
+          : res.triggered
+            ? `Triggered [${res.ruleHits.join(', ')}] -> Actions: ${res.recommendedActions.join(', ')}`
+            : 'No AutoMod rules triggered.',
+        data: { evaluation: res },
+      };
+    }
+
+    case 'false-positive': {
+      const channelName = String(ctx.args.channel || ctx.channelName || '💬・general-chat');
+      const sampleContent = String(ctx.args.content || 'Flagged message content');
+      const notes = String(ctx.args.notes || 'Reported via /false-positive');
+      const report = {
+        id: `fp-${Date.now()}`,
+        reporterUserId: ctx.actorUserId,
+        reporterUsername: ctx.actorUsername,
+        channelName,
+        sampleContent,
+        ruleHits: String(ctx.args.rules || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+        notes,
+        status: 'open' as const,
+        reviewedBy: null,
+        reviewedAt: null,
+        createdAt: now,
+      };
+      guild.falsePositiveReports.unshift(report);
+      await ctx.db.saveGuild(guild);
+      await ctx.db.appendAuditLog(guild.guildId, {
+        id: `log-fp-${Date.now()}`,
+        guildId: guild.guildId,
+        category: 'automod',
+        actorId: ctx.actorUserId,
+        actorName: ctx.actorUsername,
+        targetId: report.id,
+        targetName: channelName,
+        summary: `Submitted AutoMod false-positive report in #${channelName}: ${notes}`,
+        details: { reportId: report.id },
+        createdAt: now,
+      });
+      return {
+        ok: true,
+        title: 'False-Positive Report Submitted',
+        message: `Report ${report.id} logged for Shadow Council AutoMod tuning.`,
+        data: { report },
+      };
+    }
+
     case 'warn':
     case 'timeout':
     case 'untimeout':
@@ -337,6 +676,14 @@ export async function executeSlashCommand(
     case 'slowmode':
     case 'lock':
     case 'unlock': {
+      const action = normalized as ModerationActionType;
+      if (DESTRUCTIVE_MOD_ACTIONS.has(action) && ctx.args.confirmed === false) {
+        return {
+          ok: false,
+          title: 'Moderation Confirmation Required',
+          message: `Action "/${action}" requires explicit confirmation (confirmed: true) before execution.`,
+        };
+      }
       const targetName = String(ctx.args.member || ctx.args.userId || ctx.args.channel || 'target');
       const reason = String(ctx.args.reason || 'Moderator action');
       const targetMember = guild.members.find(
@@ -349,7 +696,14 @@ export async function executeSlashCommand(
           message: formatLocalizedString(bundle, fallback, 'commands.hierarchy_blocked'),
         };
       }
-      return createModerationCase(guild, ctx, normalized as GuildState['moderationCases'][0]['action'], targetMember?.userId ?? targetName, targetMember?.username ?? targetName, reason);
+      return createModerationCase(
+        guild,
+        ctx,
+        action,
+        targetMember?.userId ?? targetName,
+        targetMember?.username ?? targetName,
+        reason,
+      );
     }
 
     case 'warnings': {
@@ -651,8 +1005,13 @@ async function createModerationCase(
 ): Promise<CommandExecutionResult> {
   const now = new Date().toISOString();
   const durationMinutes =
-    action === 'timeout' || action === 'tempban' ? Math.max(1, Number(ctx.args.minutes || 60)) : null;
-  const expiresAt = durationMinutes ? new Date(Date.now() + durationMinutes * 60_000).toISOString() : null;
+    action === 'timeout' || action === 'tempban' || action === 'purge' || action === 'slowmode'
+      ? Math.max(1, Number(ctx.args.minutes || ctx.args.count || ctx.args.seconds || 60))
+      : null;
+  const expiresAt =
+    (action === 'timeout' || action === 'tempban') && durationMinutes
+      ? new Date(Date.now() + durationMinutes * 60_000).toISOString()
+      : null;
 
   let discordExecutionStatus: 'verified_live' | 'dry_run_no_bot' | 'failed' = 'dry_run_no_bot';
   let discordError: string | null = null;

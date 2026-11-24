@@ -26,7 +26,8 @@ export type ResourceLifecycleState =
   | 'confirmed'
   | 'applying'
   | 'applied'
-  | 'failed';
+  | 'failed'
+  | 'requires_manual_setup';
 
 export interface PermissionOverwriteSnapshot {
   targetId: string;
@@ -45,12 +46,17 @@ export interface GuildRoleRecord {
   rankOrder: number; // Higher = higher privilege for clan_rank; 0 for language/class/notification
   position: number;
   permissionsBitfield: string;
-  colorHex: string;
+  intendedPermissions: string[];
+  colorHex: string | null; // Null when legacy color is unverified/unknown
+  hoist: boolean | null;
   selfAssignable: boolean;
   exclusiveGroupId: string | null;
   discoveredFromExisting: boolean;
   mapped: boolean;
   mentionable: boolean;
+  excludeFromAutoSetup?: boolean;
+  requiresAdminReview?: boolean;
+  unknownLegacyProperties?: string[];
   lifecycleState: ResourceLifecycleState;
   conflictCandidates?: { id: string; name: string }[];
 }
@@ -60,14 +66,20 @@ export interface DiscoveredChannel {
   discordChannelId: string | null;
   name: string;
   type: 'text' | 'voice' | 'announcement' | 'forum';
+  expectedType?: 'text' | 'voice' | 'announcement' | 'forum';
   categoryId: string | null;
+  expectedCategoryId?: string | null;
+  actualParentCategoryName?: string | null;
   topic: string;
   isPrivateLeadership: boolean;
+  readOnlyForMembers: boolean;
   accessClassification: 'public_onboarding' | 'verified_member' | 'clan_member' | 'class_hall' | 'leadership_only';
   languageCode: string | null;
   mappedRolePurpose: string | null;
   discoveredFromExisting: boolean;
   required: boolean;
+  misplacedCategory?: boolean;
+  typeMismatch?: boolean;
   permissionOverwrites: PermissionOverwriteSnapshot[];
   lifecycleState: ResourceLifecycleState;
   conflictCandidates?: { id: string; name: string }[];
@@ -86,6 +98,30 @@ export interface DiscoveredCategory {
   channels: DiscoveredChannel[];
 }
 
+export interface ChannelPlacementDiff {
+  channelName: string;
+  discordChannelId: string;
+  expectedCategoryName: string;
+  actualCategoryName: string | null;
+}
+
+export interface ChannelTypeDiff {
+  channelName: string;
+  discordChannelId: string;
+  expectedType: DiscoveredChannel['type'];
+  actualType: DiscoveredChannel['type'];
+}
+
+export interface PermissionAuditFinding {
+  id: string;
+  severity: 'critical' | 'warning' | 'info';
+  targetType: 'category' | 'channel' | 'role';
+  targetName: string;
+  summary: string;
+  expectedPolicy: string;
+  actualState: string;
+}
+
 export interface ProposedSetupChange {
   id: string;
   kind:
@@ -96,6 +132,10 @@ export interface ProposedSetupChange {
     | 'create_channel'
     | 'create_role'
     | 'resolve_conflict'
+    | 'manual_review_required'
+    | 'incorrect_category_placement'
+    | 'incorrect_channel_type'
+    | 'permission_diff'
     | 'link_permission_guard';
   targetName: string;
   parentCategoryName?: string;
@@ -112,7 +152,11 @@ export interface ServerDiscoverySnapshot {
   lastDiscoveredAt: string;
   categories: DiscoveredCategory[];
   uncategorizedChannels: DiscoveredChannel[];
+  optionalChannels: DiscoveredChannel[];
   roles: GuildRoleRecord[];
+  incorrectPlacements: ChannelPlacementDiff[];
+  incorrectTypes: ChannelTypeDiff[];
+  permissionDifferences: PermissionAuditFinding[];
   proposedChanges: ProposedSetupChange[];
   conflictsCount: number;
   missingCount: number;
@@ -169,15 +213,59 @@ export interface OnboardingConfig {
   enabled: boolean;
   welcomeChannelName: string;
   rulesChannelName: string;
+  rulesMessageId: string | null;
+  rulesReactionEmoji: string;
+  rulesPublishedAt: string | null;
+  roleSelectionChannelNames: string[];
   verifiedRoleName: string;
+  recruitRoleName: string;
   requireExplicitRulesAcceptance: boolean;
-  autoAssignRecruitOnVerify: boolean;
+  autoAssignRecruitOnVerify: false; // Never grant 🌱 Recruit automatically on rules verification; requires Step 5 active-player action
   allowMultipleLanguages: boolean;
   protectInnerSanctum: boolean;
   welcomeLogChannelName: string;
   defaultWelcomeTemplate: string;
   rulesTitle: string;
   rulesBody: string;
+}
+
+export interface OnboardingMemberRecord {
+  userId: string;
+  username: string;
+  rulesVerified: boolean;
+  rulesVerifiedAt: string | null;
+  languageSelected: string | null;
+  classSelected: string | null;
+  notificationRolesCount: number;
+  activePlayerRecruitGranted: boolean;
+  activePlayerGrantedAt: string | null;
+  discordScreeningCompleted: boolean | null;
+  updatedAt: string;
+}
+
+export interface CustomResponseRule {
+  id: string;
+  trigger: string;
+  matchMode: 'exact' | 'contains' | 'startsWith';
+  response: string;
+  enabled: boolean;
+  languageCode: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface AutoModFalsePositiveReport {
+  id: string;
+  reporterUserId: string;
+  reporterUsername: string;
+  channelName: string;
+  sampleContent: string;
+  ruleHits: string[];
+  notes: string;
+  status: 'open' | 'resolved' | 'dismissed';
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
 }
 
 export interface RolePanelItem {
@@ -323,6 +411,7 @@ export interface GuildMemberRecord {
   displayName: string;
   avatarUrl: string | null;
   clanRank: ClanRankName;
+  hasClanRank?: boolean;
   languageCodes: string[]; // Completely independent from clanRank
   gamingClasses: string[];
   notificationRoles: string[];
@@ -596,6 +685,9 @@ export interface GuildState {
   languages: LanguageConfig[];
   translations: Record<string, TranslationBundle>;
   onboarding: OnboardingConfig;
+  onboardingRecords: OnboardingMemberRecord[];
+  customResponses: CustomResponseRule[];
+  falsePositiveReports: AutoModFalsePositiveReport[];
   rolePanels: RolePanel[];
   temporaryRoles: TemporaryRoleGrant[];
   moderationCases: ModerationCase[];

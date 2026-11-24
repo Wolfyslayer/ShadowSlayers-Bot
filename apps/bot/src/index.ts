@@ -6,6 +6,7 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  Partials,
   REST,
   Routes,
   type Guild,
@@ -35,6 +36,7 @@ import {
   type GuildLike,
   type SetupExecutionReport,
 } from './services/discovery.ts';
+import { applyRulesVerificationReaction, grantActivePlayerRecruit } from './services/onboarding.ts';
 import { evaluateXpAward, hashMessageContent } from './services/xp.ts';
 
 export interface BotRuntimeStatus {
@@ -110,7 +112,87 @@ export class ShadowSlayersBotClient {
       publishRolePanel: async (panel) => {
         return this.publishRolePanelToDiscord(liveGuild, panel);
       },
+      publishRulesMessage: async (params) => {
+        return this.publishRulesToDiscord(liveGuild, params);
+      },
+      grantDiscordRole: async ({ userId, roleName, reason }) => {
+        return this.grantRoleOnDiscord(liveGuild, userId, roleName, reason);
+      },
+      getLiveMemberRoleNames: async (userId) => {
+        const m = await liveGuild.members.fetch(userId).catch(() => null);
+        if (!m) return null;
+        return [...m.roles.cache.values()].map((r) => r.name);
+      },
+      getBotRuntimeSummary: () => ({
+        connected: this.status.connected,
+        mode: this.status.mode,
+        botTag: this.status.botTag,
+        guildCount: this.status.guildCount,
+      }),
     };
+  }
+
+  async grantRoleOnDiscord(
+    liveGuild: Guild,
+    userId: string,
+    roleName: string,
+    reason: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const member = await liveGuild.members.fetch(userId).catch(() => null);
+      if (!member) return { ok: false, error: 'Target member not found in Discord guild.' };
+      const allRoles = [...liveGuild.roles.cache.values()];
+      const spec = LEGACY_ROLE_SPECS.find((s) => s.name === roleName);
+      const resolved = resolveRoleMatch({ name: roleName, aliases: spec?.aliases ?? [] }, allRoles);
+      if (resolved.status === 'conflicting') {
+        return { ok: false, error: `Ambiguous role candidates for "${roleName}".` };
+      }
+      if (!resolved.matched) {
+        return { ok: false, error: `Role "${roleName}" does not exist on Discord.` };
+      }
+      const botHighest = liveGuild.members.me?.roles.highest.position ?? 0;
+      if (!canBotManageRolePosition(botHighest, resolved.matched.position)) {
+        return { ok: false, error: `Bot role hierarchy is too low to assign "${resolved.matched.name}".` };
+      }
+      if (!member.roles.cache.has(resolved.matched.id)) {
+        await member.roles.add(resolved.matched.id, reason);
+      }
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  async publishRulesToDiscord(
+    liveGuild: Guild,
+    params: { channelName: string; title: string; body: string; reactionEmoji: string },
+  ): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+    try {
+      const targetChannel = liveGuild.channels.cache.find(
+        (c) =>
+          (c.name === params.channelName || c.name === '📜・rules' || c.name === 'rules') &&
+          (c.type === ChannelType.GuildText || c.type === ChannelType.GuildAnnouncement),
+      );
+      if (!targetChannel || !targetChannel.isTextBased() || !('send' in targetChannel)) {
+        return { ok: false, error: `Target rules channel #${params.channelName} was not found on Discord.` };
+      }
+
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId('onboarding:active_player')
+          .setLabel('Join Clan as 🌱 Recruit (After Language & Class)')
+          .setStyle(ButtonStyle.Success),
+      );
+
+      const sent = await targetChannel.send({
+        content: `**${params.title}**\n\n${params.body}\n\n_React with ${params.reactionEmoji} below to receive **✅ Verified**, then choose your Language and Class in **🎭・choose-your-role** / **🎭・выбор-ролей**._`,
+        components: [row],
+      });
+      await sent.react(params.reactionEmoji).catch(() => undefined);
+      return { ok: true, messageId: sent.id };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   async executeLiveModeration(
@@ -230,10 +312,10 @@ export class ShadowSlayersBotClient {
     const item = panel.items.find((i) => i.roleId === itemRoleKey);
     if (!item) return { ok: false, message: 'Role option not found on panel.' };
 
-    if (panel.category === 'clan_rank') {
+    if (panel.category === 'clan_rank' || panel.category === 'verified' || panel.category === 'system') {
       return {
         ok: false,
-        message: 'Clan hierarchy ranks cannot be self-assigned. Only Shadow King / Shadow Council / Warlord can assign clan ranks.',
+        message: 'Clan hierarchy ranks, Bots, and ✅ Verified cannot be self-assigned through public role panels.',
       };
     }
 
@@ -261,7 +343,6 @@ export class ShadowSlayersBotClient {
       };
     }
 
-    // Track in DB + apply exclusive/multiple logic
     let memberRec = guildState.members.find((m) => m.userId === member.id);
     if (!memberRec) {
       memberRec = {
@@ -270,6 +351,9 @@ export class ShadowSlayersBotClient {
         displayName: member.displayName,
         avatarUrl: member.displayAvatarURL(),
         clanRank: resolveMemberClanRank([...member.roles.cache.values()].map((r) => r.name)),
+        hasClanRank: [...member.roles.cache.values()].some((r) =>
+          CLAN_RANK_ORDER.includes(r.name as ClanRankName),
+        ),
         languageCodes: [],
         gamingClasses: [],
         notificationRoles: [],
@@ -302,7 +386,6 @@ export class ShadowSlayersBotClient {
       return { ok: false, message: sel.reason || 'Role selection denied.' };
     }
 
-    // Enforce Discord role changes
     if (panel.groupType === 'exclusive') {
       for (const sibling of panel.items) {
         if (sibling.roleId === item.roleId) continue;
@@ -335,12 +418,68 @@ export class ShadowSlayersBotClient {
       actorName: member.user.username,
       targetId: resolved.matched.id,
       targetName: resolved.matched.name,
-      summary: `${member.user.username} updated ${panel.category} role (${resolved.matched.name}) via ${panel.title}; clan rank (${memberRec.clanRank}) unchanged.`,
+      summary: `${member.user.username} updated ${panel.category} role (${resolved.matched.name}) via ${panel.title}; clan rank unchanged.`,
       details: { panelId: panel.id, groupType: panel.groupType },
       createdAt: new Date().toISOString(),
     });
 
-    return { ok: true, message: `Updated **${resolved.matched.name}** (clan rank **${memberRec.clanRank}** unchanged).` };
+    return { ok: true, message: `Updated **${resolved.matched.name}** cleanly.` };
+  }
+
+  private async handleRulesReactionChange(
+    messageId: string,
+    channelName: string,
+    emojiName: string | null,
+    userId: string,
+    username: string,
+    added: boolean,
+    liveGuild: Guild,
+  ): Promise<void> {
+    const guildState = await this.db.getGuild(this.guildId);
+    if (!guildState || !guildState.onboarding.enabled) return;
+
+    const isRulesChannel =
+      channelName === guildState.onboarding.rulesChannelName || channelName === '📜・rules' || channelName === 'rules';
+    const isRulesMessage = guildState.onboarding.rulesMessageId
+      ? guildState.onboarding.rulesMessageId === messageId
+      : isRulesChannel;
+    const expectedEmoji = guildState.onboarding.rulesReactionEmoji || '✅';
+    if (!isRulesMessage || emojiName !== expectedEmoji) return;
+
+    const member = await liveGuild.members.fetch(userId).catch(() => null);
+    if (!member) return;
+
+    const verifiedSpec = LEGACY_ROLE_SPECS.find((r) => r.key === 'sys_verified');
+    const resolvedVerified = resolveRoleMatch(
+      { name: '✅ Verified', aliases: verifiedSpec?.aliases ?? [] },
+      [...liveGuild.roles.cache.values()],
+    );
+    const botHighest = liveGuild.members.me?.roles.highest.position ?? 0;
+
+    if (resolvedVerified.matched && canBotManageRolePosition(botHighest, resolvedVerified.matched.position)) {
+      if (added && !member.roles.cache.has(resolvedVerified.matched.id)) {
+        await member.roles.add(resolvedVerified.matched.id, '📜・rules ✅ reaction verification');
+      } else if (!added && member.roles.cache.has(resolvedVerified.matched.id)) {
+        await member.roles.remove(resolvedVerified.matched.id, 'Removed ✅ rules verification reaction (unrelated roles preserved)');
+      }
+    }
+
+    applyRulesVerificationReaction(guildState, { userId, username, added });
+    await this.db.saveGuild(guildState);
+    await this.db.appendAuditLog(this.guildId, {
+      id: `log-rulesverify-${Date.now()}`,
+      guildId: this.guildId,
+      category: 'role_change',
+      actorId: userId,
+      actorName: username,
+      targetId: resolvedVerified.matched?.id ?? null,
+      targetName: '✅ Verified',
+      summary: added
+        ? `${username} accepted 📜・rules (${expectedEmoji}) and received ✅ Verified.`
+        : `${username} removed ${expectedEmoji} in 📜・rules; ✅ Verified removed while preserving all unrelated roles.`,
+      details: { added, channelName },
+      createdAt: new Date().toISOString(),
+    });
   }
 
   async start(botToken: string, clientId: string): Promise<void> {
@@ -354,8 +493,10 @@ export class ShadowSlayersBotClient {
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.GuildMessageReactions,
         GatewayIntentBits.GuildVoiceStates,
       ],
+      partials: [Partials.Message, Partials.Reaction, Partials.User],
     });
 
     this.client.once(Events.ClientReady, async (readyClient) => {
@@ -405,6 +546,40 @@ export class ShadowSlayersBotClient {
       });
     });
 
+    this.client.on(Events.MessageReactionAdd, async (reaction, user) => {
+      if (user.bot) return;
+      if (reaction.partial) await reaction.fetch().catch(() => null);
+      const guild = reaction.message.guild;
+      if (!guild) return;
+      const chName = 'name' in reaction.message.channel && reaction.message.channel.name ? reaction.message.channel.name : '';
+      await this.handleRulesReactionChange(
+        reaction.message.id,
+        chName,
+        reaction.emoji.name,
+        user.id,
+        user.username || user.id,
+        true,
+        guild,
+      );
+    });
+
+    this.client.on(Events.MessageReactionRemove, async (reaction, user) => {
+      if (user.bot) return;
+      if (reaction.partial) await reaction.fetch().catch(() => null);
+      const guild = reaction.message.guild;
+      if (!guild) return;
+      const chName = 'name' in reaction.message.channel && reaction.message.channel.name ? reaction.message.channel.name : '';
+      await this.handleRulesReactionChange(
+        reaction.message.id,
+        chName,
+        reaction.emoji.name,
+        user.id,
+        user.username || user.id,
+        false,
+        guild,
+      );
+    });
+
     this.client.on(Events.InteractionCreate, async (interaction) => {
       const liveGuild = interaction.guild ?? this.getLiveDiscordGuild();
       const memberRoles =
@@ -423,6 +598,35 @@ export class ShadowSlayersBotClient {
             discordGuild: liveGuild as unknown as GuildLike,
             db: this.db,
           });
+          return;
+        }
+        if (interaction.customId === 'onboarding:active_player' && liveGuild) {
+          const guildState = await this.db.getGuild(this.guildId);
+          if (!guildState) {
+            await interaction.reply({ ephemeral: true, content: 'Guild state missing.' });
+            return;
+          }
+          const res = grantActivePlayerRecruit(guildState, {
+            userId: interaction.user.id,
+            username: interaction.user.username,
+            actualDiscordRoleNames: memberRoles,
+          });
+          if (res.ok && res.grantedRole) {
+            const roleGrant = await this.grantRoleOnDiscord(
+              liveGuild,
+              interaction.user.id,
+              res.grantedRole,
+              'Step 5 active-player onboarding action',
+            );
+            if (!roleGrant.ok) {
+              await interaction.reply({ ephemeral: true, content: roleGrant.error || 'Could not assign 🌱 Recruit role.' });
+              return;
+            }
+          }
+          if (res.ok) {
+            await this.db.saveGuild(guildState);
+          }
+          await interaction.reply({ ephemeral: true, content: res.reason });
           return;
         }
         if (interaction.customId.startsWith('rolepanel:') && liveGuild && interaction.member && 'roles' in interaction.member) {
@@ -514,6 +718,20 @@ export class ShadowSlayersBotClient {
           createdAt: new Date().toISOString(),
         });
         return;
+      }
+
+      // Deterministic custom responses (zero AI)
+      const lowerContent = message.content.trim().toLowerCase();
+      const matchedRule = guild.customResponses.find((r) => {
+        if (!r.enabled) return false;
+        const t = r.trigger.trim().toLowerCase();
+        if (!t) return false;
+        if (r.matchMode === 'exact') return lowerContent === t;
+        if (r.matchMode === 'startsWith') return lowerContent.startsWith(t);
+        return lowerContent.includes(t);
+      });
+      if (matchedRule && 'reply' in message) {
+        await message.reply({ content: matchedRule.response }).catch(() => undefined);
       }
 
       const member = guild.members.find((m) => m.userId === message.author.id);

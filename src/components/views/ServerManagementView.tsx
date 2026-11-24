@@ -5,7 +5,15 @@ import type { GuildState, ResourceLifecycleState } from '../../../packages/share
 interface ServerManagementViewProps {
   guild: GuildState;
   onRescan: () => Promise<void>;
-  onConfirmSetup: (mode: 'missing_only' | 'full_setup') => Promise<{ executionMode?: string }>;
+  onConfirmSetup: (mode: 'missing_only' | 'full_setup') => Promise<{
+    executionMode?: string;
+    report?: {
+      appliedCount?: number;
+      failedCount?: number;
+      skippedConflicts?: number;
+      skippedManualItems?: string[];
+    };
+  }>;
 }
 
 const STATE_COLOR: Record<ResourceLifecycleState, string> = {
@@ -18,6 +26,7 @@ const STATE_COLOR: Record<ResourceLifecycleState, string> = {
   applying: 'text-amber-200',
   applied: 'text-emerald-400',
   failed: 'text-red-400',
+  requires_manual_setup: 'text-purple-300',
 };
 
 export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
@@ -34,6 +43,11 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
     (c) => c.status === 'proposed' || c.status === 'missing' || c.status === 'failed' || c.status === 'confirmed',
   );
   const conflictChanges = guild.discovery.proposedChanges.filter((c) => c.status === 'conflicting');
+  const manualChanges = guild.discovery.proposedChanges.filter((c) => c.status === 'requires_manual_setup');
+  const incorrectPlacements = guild.discovery.incorrectPlacements ?? [];
+  const incorrectTypes = guild.discovery.incorrectTypes ?? [];
+  const permissionDifferences = guild.discovery.permissionDifferences ?? [];
+  const optionalChannels = guild.discovery.optionalChannels ?? [];
 
   const handleRescan = async () => {
     setBusy(true);
@@ -55,11 +69,19 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
     try {
       const res = await onConfirmSetup(setupMode);
       setExplicitConfirm(false);
-      setFeedback(
-        res.executionMode === 'live_discord'
-          ? `Executed additive ${setupMode} setup against live Discord guild.`
-          : 'Setup plan confirmed in database (standby mode: live Discord Gateway is not currently connected, so changes are marked "confirmed" rather than "applied").',
-      );
+      if (res.executionMode === 'live_discord') {
+        const manualNote =
+          res.report?.skippedManualItems && res.report.skippedManualItems.length > 0
+            ? ` Manual-only skipped: ${res.report.skippedManualItems.join(', ')}.`
+            : '';
+        setFeedback(
+          `Executed additive ${setupMode} setup against live Discord guild (${res.report?.appliedCount ?? 0} applied, ${res.report?.failedCount ?? 0} failed).${manualNote}`,
+        );
+      } else {
+        setFeedback(
+          'Setup plan confirmed in database (standby mode: live Discord Gateway is not currently connected, so changes are marked "confirmed" rather than "applied").',
+        );
+      }
     } catch (err) {
       setFeedback(err instanceof Error ? err.message : 'Confirmation failed');
     } finally {
@@ -72,10 +94,10 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
       <div className="rounded-xl border border-slate-800 bg-[#121620] p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="font-display text-xl font-semibold text-slate-100">
-            Non-Destructive Server Discovery
+            Non-Destructive Server Discovery & Setup Audit
           </h2>
           <p className="text-sm text-slate-400 mt-1">
-            Last scanned: <span className="font-mono-tabular text-slate-300">{new Date(guild.discovery.lastDiscoveredAt).toLocaleString()}</span> · Existing roles, colors, positions, and permission overwrites are never overwritten or deleted.
+            Last scanned: <span className="font-mono-tabular text-slate-300">{new Date(guild.discovery.lastDiscoveredAt).toLocaleString()}</span> · Existing roles, colors, positions, and overwrites are never deleted or overwritten. 👑 Shadow King always requires manual setup.
           </p>
         </div>
         <button
@@ -95,14 +117,16 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
         </div>
       )}
 
-      {conflictChanges.length > 0 && (
+      {(conflictChanges.length > 0 || incorrectPlacements.length > 0 || incorrectTypes.length > 0 || permissionDifferences.length > 0) && (
         <div className="p-4 rounded-xl border border-red-500/40 bg-red-950/20 text-red-200 space-y-2">
           <div className="flex items-center gap-2 font-semibold text-sm">
             <AlertTriangle className="w-4 h-4 text-red-400" />
-            <span>{conflictChanges.length} Ambiguous / Conflicting Resource(s) Require Administrator Resolution</span>
+            <span>
+              Audit Findings: {conflictChanges.length} Conflict(s), {incorrectPlacements.length} Misplaced Channel(s), {incorrectTypes.length} Type Mismatch(es), {permissionDifferences.length} Permission Diff(s)
+            </span>
           </div>
           <p className="text-xs text-red-200/80">
-            Auto-selection is strictly blocked when multiple role or channel candidates match an alias. Resolve conflicts in Discord before applying setup.
+            Setup never guesses on ambiguous aliases, never silently moves misplaced channels, and never strips existing Discord overwrites. Review findings below before manual remediation.
           </p>
         </div>
       )}
@@ -111,9 +135,9 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
       <div className="rounded-xl border border-slate-800 bg-[#121620] p-6 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
-            <h3 className="font-display text-lg font-semibold text-slate-100">Proposed Setup Operations</h3>
+            <h3 className="font-display text-lg font-semibold text-slate-100">Proposed Setup & Audit Operations</h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Additive mapping preview ({actionableChanges.length} pending/confirmed, {conflictChanges.length} conflicting, {guild.discovery.proposedChanges.length - actionableChanges.length - conflictChanges.length} mapped/applied)
+              {actionableChanges.length} pending/confirmed · {manualChanges.length} manual-only · {conflictChanges.length} conflicting · {guild.discovery.proposedChanges.length - actionableChanges.length - conflictChanges.length - manualChanges.length} mapped/applied
             </p>
           </div>
           {guild.discovery.setupConfirmedAt && (
@@ -162,7 +186,7 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
                   onChange={(e) => setExplicitConfirm(e.target.checked)}
                   className="w-4 h-4 accent-amber-500 rounded"
                 />
-                <span>I confirm these additive, non-destructive setup actions only (no roles deleted/renamed).</span>
+                <span>I confirm these additive, non-destructive setup actions only (no roles deleted/renamed; 👑 Shadow King stays manual).</span>
               </label>
             </div>
             <button
@@ -178,11 +202,74 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
         )}
       </div>
 
+      {/* Placement, Type, and Permission Audit Findings */}
+      {(incorrectPlacements.length > 0 || incorrectTypes.length > 0 || permissionDifferences.length > 0) && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="rounded-xl border border-slate-800 bg-[#121620] p-5 space-y-2">
+            <h3 className="font-display text-base font-semibold text-slate-100">
+              Misplaced Channels ({incorrectPlacements.length})
+            </h3>
+            {incorrectPlacements.length === 0 ? (
+              <p className="text-xs text-slate-400">All discovered legacy channels reside in their expected category.</p>
+            ) : (
+              <div className="space-y-2 text-xs">
+                {incorrectPlacements.map((p) => (
+                  <div key={p.discordChannelId} className="p-2.5 rounded-lg bg-[#0B0D12] border border-slate-800">
+                    <p className="font-mono-tabular text-amber-300">#{p.channelName}</p>
+                    <p className="text-slate-400 mt-0.5">
+                      Actual: {p.actualCategoryName ?? 'Uncategorized'} → Expected: {p.expectedCategoryName}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-800 bg-[#121620] p-5 space-y-2">
+            <h3 className="font-display text-base font-semibold text-slate-100">
+              Channel Type Mismatches ({incorrectTypes.length})
+            </h3>
+            {incorrectTypes.length === 0 ? (
+              <p className="text-xs text-slate-400">No text/voice/announcement type mismatches found.</p>
+            ) : (
+              <div className="space-y-2 text-xs">
+                {incorrectTypes.map((t) => (
+                  <div key={t.discordChannelId} className="p-2.5 rounded-lg bg-[#0B0D12] border border-slate-800">
+                    <p className="font-mono-tabular text-amber-300">#{t.channelName}</p>
+                    <p className="text-slate-400 mt-0.5">
+                      Actual: {t.actualType} → Expected: {t.expectedType}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-800 bg-[#121620] p-5 space-y-2">
+            <h3 className="font-display text-base font-semibold text-slate-100">
+              Permission Audit Diffs ({permissionDifferences.length})
+            </h3>
+            {permissionDifferences.length === 0 ? (
+              <p className="text-xs text-slate-400">No permission boundary drifts detected.</p>
+            ) : (
+              <div className="space-y-2 text-xs max-h-60 overflow-y-auto">
+                {permissionDifferences.map((f) => (
+                  <div key={f.id} className="p-2.5 rounded-lg bg-[#0B0D12] border border-slate-800">
+                    <p className="font-semibold text-red-300">[{f.severity}] {f.targetName}</p>
+                    <p className="text-slate-400 mt-0.5">{f.summary}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Categories & Channels */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="rounded-xl border border-slate-800 bg-[#121620] p-6">
           <h3 className="font-display text-lg font-semibold text-slate-100 mb-4">
-            Discovered Categories & Channels ({guild.discovery.categories.length})
+            Legacy Categories & Channels ({guild.discovery.categories.length} categories · {guild.discovery.categories.reduce((sum, c) => sum + c.channels.length, 0)} channels)
           </h3>
           <div className="space-y-4">
             {guild.discovery.categories.map((cat) => (
@@ -203,12 +290,25 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
                 <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
                   {cat.channels.map((ch) => (
                     <span key={ch.id} className="font-mono-tabular">
-                      #{ch.name}
+                      {ch.type === 'voice' ? '🔊 ' : '#'}{ch.name}{ch.readOnlyForMembers ? ' (RO)' : ''}
                     </span>
                   ))}
                 </div>
               </div>
             ))}
+
+            {optionalChannels.length > 0 && (
+              <div className="pt-2 border-t border-slate-800">
+                <p className="text-xs font-semibold text-sky-300 mb-1">
+                  Optional Non-Legacy Extension Channels ({optionalChannels.length})
+                </p>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400 font-mono-tabular">
+                  {optionalChannels.map((ch) => (
+                    <span key={ch.id}>#{ch.name}</span>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {guild.discovery.uncategorizedChannels && guild.discovery.uncategorizedChannels.length > 0 && (
               <div className="pt-2 border-t border-slate-800">
@@ -228,7 +328,7 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
         {/* Discovered Roles */}
         <div className="rounded-xl border border-slate-800 bg-[#121620] p-6">
           <h3 className="font-display text-lg font-semibold text-slate-100 mb-4">
-            Discovered Role Hierarchy ({guild.discovery.roles.length})
+            Legacy Role Hierarchy ({guild.discovery.roles.length})
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-sm">
@@ -236,17 +336,22 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
                 <tr className="border-b border-slate-800 text-xs text-slate-400">
                   <th className="py-2 pr-3 font-medium">Role Name</th>
                   <th className="py-2 pr-3 font-medium">Group</th>
-                  <th className="py-2 pr-3 font-medium text-right">Weight</th>
+                  <th className="py-2 pr-3 font-medium text-right">Color</th>
                   <th className="py-2 font-medium text-right">Lifecycle</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/70">
                 {guild.discovery.roles.map((role) => (
                   <tr key={role.id} className="h-10">
-                    <td className="py-2 pr-3 text-slate-200 font-medium">{role.name}</td>
+                    <td className="py-2 pr-3 text-slate-200 font-medium">
+                      {role.name}
+                      {role.excludeFromAutoSetup ? (
+                        <span className="ml-2 text-[11px] text-purple-300">(Manual Only)</span>
+                      ) : null}
+                    </td>
                     <td className="py-2 pr-3 text-xs text-slate-400">{role.category}</td>
-                    <td className="py-2 pr-3 font-mono-tabular text-xs text-slate-300 text-right">
-                      {role.rankOrder}
+                    <td className="py-2 pr-3 font-mono-tabular text-xs text-slate-400 text-right">
+                      {role.colorHex ?? 'unverified'}
                     </td>
                     <td className={`py-2 text-xs text-right font-mono-tabular ${STATE_COLOR[role.lifecycleState] ?? 'text-slate-400'}`}>
                       {role.lifecycleState}

@@ -2,23 +2,32 @@
 
 All commands enforce RBAC permission validation, localized responses, structured error handling, and audit logging. No AI commands exist.
 
-## General
+## General & Diagnostics
 - `/help` — Show categorized command directory
 - `/about` — Display bot architecture, version, and realm summary
+- `/bot-status` — Inspect Discord Gateway connection mode, tag, guild count, and database driver
 - `/profile` — View member XP, level, clan rank, classes, and languages
-- `/server` — Show discovered server categories, roles, and member counts
+- `/userinfo` — Inspect a member's clan rank, verification state, classes, and languages
+- `/avatar` — View a member's avatar URL
+- `/server` / `/serverinfo` — Show discovered server categories, roles, and member counts
 - `/language` — Select or toggle personal enabled language roles
 - `/modules` — View enabled/disabled server modules
 - `/dashboard` — Retrieve direct link to the administration web dashboard
 
-## Setup & Administration
+## Setup, Onboarding & Administration
 - `/setup` — Ephemeral, initiator-locked server discovery preview (`Missing only`, two-step confirmed `Full setup`, `Cancel`, partial-failure retry)
 - `/config` — Inspect or update core guild configuration values
-- `/permissions` — View role hierarchy and permission capability matrix
+- `/permissions` / `/permissions preview` / `/permissions matrix` — Run permission audit, preview 10-case access boundary matrix, or view capability table
+- `/rules publish` — Publish the `📜・rules` verification message with `✅` reaction & active-player button
+- `/onboarding` — Check 5-step onboarding status or complete Step 5 active-player `🌱 Recruit` confirmation
 
-## Roles
-- `/roles` — List role panels and self-assignable role groups
+## Roles & Deterministic AutoMod
+- `/roles` / `/roles list` — List role panels and self-assignable role groups
 - `/roles publish` — Publish configured role-selection panels (strictly panel publishing; never runs server setup)
+- `/automod status` — Inspect active deterministic AutoMod rules and lockdown state
+- `/automod test` — Test sample message text against deterministic AutoMod rules
+- `/false-positive` — Submit an AutoMod false-positive report for moderator review
+- `/custom-response` — Add, list, or remove deterministic keyword/prefix/exact responses (Zero AI)
 
 ## Moderation
 - `/warn` — Issue a formal warning with unique case ID

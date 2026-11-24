@@ -20,7 +20,8 @@
 Clan rank hierarchy (`👑 Shadow King` > `🛡️ Shadow Council` > `⚔️ Warlord` > `🔥 Elite Warrior` > `🖤 ShadowSlayer` > `🌱 Recruit`) is enforced server-side in `packages/permissions/src/hierarchy.ts`:
 - Moderators cannot warn, timeout, kick, or ban members of equal or higher clan rank; Discord bot role-position checks enforce `botHighestPosition > targetPosition`.
 - Language roles (`🇬🇧 English`, `🇷🇺 Русский`), Class roles (`⚔️ Warrior`, `🔮 Sorcerer`, `🗡️ Swordsman`), and Notification roles carry zero moderation privilege and remain independent of clan ranks.
-- Discord evaluates channel `Allow ViewChannel` overwrites via logical **OR** across roles; protected categories (`02`–`09`) explicitly deny `@everyone` `ViewChannel` so unverified members cannot bypass `📜 01 — GATE OF SHADOWS`, Class Halls stay isolated, and `👑 07 — THE INNER SANCTUM` remains leadership-only.
+- Discord evaluates channel `Allow ViewChannel` overwrites via logical **OR** across roles; protected categories (`02`–`09`) explicitly deny `@everyone` `ViewChannel` so unverified members cannot bypass `📜 01 — GATE OF SHADOWS`, Class Halls stay isolated, read-only channels (`📜・rules`, `🏰・clan-announcements`, `📋・clan-roster`, etc.) deny ordinary member `SendMessages`, and `👑 07 — THE INNER SANCTUM` remains leadership-only.
+- Automated setup never creates `👑 Shadow King` (`excludeFromAutoSetup: true`) and never auto-grants privileged permissions (`Administrator`, `ManageGuild`, `ManageRoles`, `BanMembers`).
 - Ticket transcripts and `👑 07 — THE INNER SANCTUM` configs require verified leadership permissions.
 
 ## 4. Rate Limiting, Validation & AutoMod Safety
