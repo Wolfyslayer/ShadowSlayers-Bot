@@ -45,7 +45,7 @@ import { apiRequest } from './lib/api';
 import { useLocale } from './lib/LocaleProvider';
 import type { CommandDesc } from './components/views/CommandsView';
 import { StatusPill } from './components/ui/DashboardPrimitives';
-import guildCrestUrl from './assets/images/crest_shadowslayers_1795519523634.jpg';
+import guildCrestUrl from './assets/images/Icon.jpg';
 
 const OverviewView = lazy(() => import('./components/views/OverviewView').then((module) => ({ default: module.OverviewView })));
 const StatisticsView = lazy(() => import('./components/views/StatisticsView').then((module) => ({ default: module.StatisticsView })));

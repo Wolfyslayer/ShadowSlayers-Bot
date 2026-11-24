@@ -3,8 +3,8 @@ import { Shield } from 'lucide-react';
 import type { AuthUserSession } from '../../packages/shared/src/types';
 import { apiRequest } from '../lib/api';
 import { useLocale } from '../lib/LocaleProvider';
-import bannerUrl from '../assets/images/banner_sanctum_1795519524069.jpg';
-import guildCrestUrl from '../assets/images/crest_shadowslayers_1795519523634.jpg';
+import bannerUrl from '../assets/images/Banner.jpg';
+import guildCrestUrl from '../assets/images/Icon.jpg';
 
 interface AuthStatus {
   discordOAuthConfigured: boolean;

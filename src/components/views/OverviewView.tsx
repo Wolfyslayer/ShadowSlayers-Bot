@@ -15,7 +15,7 @@ import {
 import type { GuildState } from '../../../packages/shared/src/types';
 import { useLocale } from '../../lib/LocaleProvider';
 import { EmptyState, MetricCard, PageHeading, StatusPill } from '../ui/DashboardPrimitives';
-import bannerUrl from '../../assets/images/banner_sanctum_1795519524069.jpg';
+import bannerUrl from '../../assets/images/Banner.jpg';
 
 type ConnectionState = 'checking' | 'online' | 'offline';
 
