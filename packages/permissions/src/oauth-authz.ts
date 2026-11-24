@@ -19,6 +19,14 @@ export interface DiscordOAuthAuthorizationResult {
   session: AuthUserSession | null;
 }
 
+export function sessionCanAccessGuild(
+  session: Pick<AuthUserSession, 'guildId'>,
+  requestedGuildId: string,
+  defaultGuildId: string,
+): boolean {
+  return requestedGuildId === (session.guildId || defaultGuildId);
+}
+
 /**
  * Default-deny Discord OAuth2 authorization check.
  * Requires:

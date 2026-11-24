@@ -9,28 +9,47 @@ import type { ScheduledTask } from '../../../../packages/shared/src/types.ts';
 export class PersistentTaskScheduler {
   private readonly inFlight = new Set<string>();
   private timer: NodeJS.Timeout | null = null;
+  private activeTick: Promise<number> | null = null;
   private readonly db: DatabaseAdapter;
   private readonly onDispatch?: (task: ScheduledTask) => Promise<void>;
+  private readonly onError: (err: unknown) => void;
 
-  constructor(db: DatabaseAdapter, onDispatch?: (task: ScheduledTask) => Promise<void>) {
+  constructor(
+    db: DatabaseAdapter,
+    onDispatch?: (task: ScheduledTask) => Promise<void>,
+    onError: (err: unknown) => void = (err) => console.error('[Scheduler] Tick failed:', err),
+  ) {
     this.db = db;
     this.onDispatch = onDispatch;
+    this.onError = onError;
   }
 
   start(intervalMs = 30_000): void {
     if (this.timer) return;
     // Recover overdue tasks immediately on boot
-    void this.tick();
+    this.scheduleTick();
     this.timer = setInterval(() => {
-      void this.tick();
+      this.scheduleTick();
     }, intervalMs);
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
+    if (this.activeTick) await this.activeTick.catch(this.onError);
+  }
+
+  private scheduleTick(): void {
+    if (this.activeTick) return;
+    const activeTick = this.tick();
+    this.activeTick = activeTick;
+    void activeTick
+      .catch(this.onError)
+      .finally(() => {
+        if (this.activeTick === activeTick) this.activeTick = null;
+      });
   }
 
   async tick(nowIso = new Date().toISOString()): Promise<number> {

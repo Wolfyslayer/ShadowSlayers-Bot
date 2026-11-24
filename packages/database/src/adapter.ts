@@ -24,6 +24,7 @@ export interface DatabaseAdapter {
   getPendingTasks(nowIso: string): Promise<ScheduledTask[]>;
   updateTaskStatus(guildId: string, taskId: string, patch: Partial<ScheduledTask>): Promise<void>;
   exportSnapshot(): Promise<DatabaseRoot>;
+  close?(): Promise<void>;
 }
 
 /**
@@ -125,7 +126,7 @@ export class LocalPersistentAdapter implements DatabaseAdapter {
 
   async appendAuditLog(guildId: string, entry: AuditLogEntry): Promise<void> {
     const guild = this.state.guilds[guildId];
-    if (!guild) return;
+    if (!guild) throw new Error(`[Database] Cannot append audit log: guild "${guildId}" does not exist.`);
     guild.logs.unshift(entry);
     const cutoff = Date.now() - guild.logging.retentionDays * 86400_000;
     guild.logs = guild.logs
@@ -150,9 +151,9 @@ export class LocalPersistentAdapter implements DatabaseAdapter {
 
   async updateTaskStatus(guildId: string, taskId: string, patch: Partial<ScheduledTask>): Promise<void> {
     const guild = this.state.guilds[guildId];
-    if (!guild) return;
+    if (!guild) throw new Error(`[Database] Cannot update scheduled task: guild "${guildId}" does not exist.`);
     const task = guild.scheduledTasks.find((t) => t.id === taskId);
-    if (!task) return;
+    if (!task) throw new Error(`[Database] Cannot update scheduled task "${taskId}": task does not exist.`);
     if (task.status === 'completed' && patch.status && patch.status !== 'completed') {
       return;
     }
@@ -163,6 +164,10 @@ export class LocalPersistentAdapter implements DatabaseAdapter {
 
   async exportSnapshot(): Promise<DatabaseRoot> {
     return structuredClone(this.state);
+  }
+
+  async close(): Promise<void> {
+    await this.writeQueue;
   }
 }
 

@@ -81,7 +81,31 @@ if (fs.existsSync(envExamplePath)) {
   console.log('✓ .env.example verified: clean templates without hardcoded private credentials.');
 }
 
-// 5. Verify 16 Legacy Roles integrity
+  // 5. Only the public API origin may be read from Vite's browser-exposed environment.
+  const frontendRoot = path.join(ROOT_DIR, 'src');
+  const frontendFiles = [frontendRoot];
+  const allowedViteVariables = new Set(['VITE_API_BASE_URL']);
+  while (frontendFiles.length > 0) {
+    const current = frontendFiles.pop();
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const entryPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        frontendFiles.push(entryPath);
+        continue;
+      }
+      if (!/\.(?:js|jsx|ts|tsx)$/.test(entry.name)) continue;
+      const content = fs.readFileSync(entryPath, 'utf8');
+      for (const [, variable] of content.matchAll(/import\.meta\.env\.([A-Z0-9_]+)/g)) {
+        if (!allowedViteVariables.has(variable)) {
+          console.error(`[FAIL] Private or unapproved browser environment variable used: ${variable}`);
+          process.exit(1);
+        }
+      }
+    }
+  }
+  console.log('✓ Frontend only reads the approved public API-origin variable from Vite.');
+
+  // 6. Verify 16 Legacy Roles integrity
 const legacyFile = path.join(ROOT_DIR, 'packages/shared/src/legacy-template.ts');
 if (fs.existsSync(legacyFile)) {
   const content = fs.readFileSync(legacyFile, 'utf8');
@@ -110,6 +134,33 @@ if (fs.existsSync(legacyFile)) {
     }
   }
   console.log('✓ Legacy role integrity verified: all 16 canonical roles preserved with exact names & emojis.');
+}
+
+const distPath = path.join(ROOT_DIR, 'dist');
+if (fs.existsSync(distPath)) {
+  const pending = [distPath];
+  const privateValuePatterns = [
+    /-----BEGIN (?:RSA )?PRIVATE KEY-----/,
+    /AIzaSy[A-Za-z0-9_-]{30,}/,
+    /"?(?:DISCORD_BOT_TOKEN|DISCORD_CLIENT_SECRET|FIREBASE_PRIVATE_KEY|SESSION_SECRET|SUPABASE_SERVICE_ROLE_KEY)"?\s*:/,
+  ];
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const entryPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(entryPath);
+      } else {
+        const content = fs.readFileSync(entryPath, 'utf8');
+        if (privateValuePatterns.some((pattern) => pattern.test(content))) {
+          console.error(`[FAIL] Private credential material detected in dashboard output: ${path.relative(ROOT_DIR, entryPath)}`);
+          process.exit(1);
+        }
+      }
+    }
+  }
+  console.log('✓ Built dashboard contains no recognized private credential material.');
 }
 
 console.log('[Security Audit] All security & AI-hygiene checks passed successfully.');

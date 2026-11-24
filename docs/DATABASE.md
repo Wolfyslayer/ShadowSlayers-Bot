@@ -1,10 +1,12 @@
 # Database Architecture – ShadowSlayers – Legends of Elements
 
-## 1. Abstraction Strategy (Firestore First, Supabase Portable, No Silent Fallback)
+## 1. Abstraction Strategy (Firestore First, No Silent Fallback)
 All application modules read and write through the `DatabaseAdapter` interface in `packages/database/src/adapter.ts`.
 - **Explicit Local Mode (`DATABASE_ADAPTER=local` -> `LocalPersistentAdapter`)**: Atomic JSON-backed store in `.data/shadowslayers-db.json` for local/preview development.
-- **Production Primary (`DATABASE_ADAPTER=firestore`)**: Designed for Firebase Spark (Cloud Firestore) using server-side credentials. If `firestore` is selected without live credentials/SDK wiring, startup fails explicitly instead of silently falling back to ephemeral local JSON.
-- **Fallback (`DATABASE_ADAPTER=supabase`)**: Portable relational adapter contract; fails explicitly if requested without provisioned SDK credentials.
+- **Production Primary (`DATABASE_ADAPTER=firestore`)**: Firebase Cloud Firestore using server-side Admin SDK credentials. Missing credentials fail startup; production bot/API processes require Firestore rather than local JSON.
+- Supabase is not an implemented adapter and is not a supported deployment option.
+
+The static dashboard currently has no Firebase client SDK or Firebase Authentication integration. All browser reads/writes go through the trusted API because the existing OAuth/passcode session and Discord role checks cannot be reproduced safely with the current Firestore document schema and rules. Firestore rules deny access by default; Admin SDK code bypasses those rules and must continue to enforce API authorization.
 
 ## 2. Core Collections (22 Structured Entities)
 All collections enforce server-level isolation via `guildId` and consistent ISO-8601 timestamps (`createdAt`, `updatedAt`):
@@ -55,4 +57,10 @@ All collections enforce server-level isolation via `guildId` and consistent ISO-
 - **Non-Fallback Policy**:
   - If `DATABASE_ADAPTER=firestore` is configured but credentials are missing, production startup throws an explicit fatal error (`Silent fallback to local JSON storage is forbidden in production`).
   - Setting `DATABASE_ADAPTER=supabase` throws an explicit startup error indicating that Supabase is an unimplemented future adapter.
+
+## 5. Runtime Ownership and Verification
+- Only the persistent bot process starts the scheduler. The standalone trusted API does not start a Discord Gateway or scheduler; its manual scheduler endpoint returns HTTP 503 rather than claiming work was executed.
+- Guild-scoped API access is bound to the session's guild ID (or the configured default guild for legacy admin sessions), in addition to the session capability check.
+- Schema migration runs when the Admin adapter initializes and reads a guild document. Automated migration/adapter tests use local fixtures and mocked Firestore interfaces; no live Firebase project was available for this phase.
+- Failed audit-log or task-status writes for unknown guilds/tasks throw explicit errors instead of being silently dropped.
 

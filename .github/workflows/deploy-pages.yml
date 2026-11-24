@@ -23,7 +23,10 @@ jobs:
       - name: Build Static Dashboard
         env:
           VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
-        run: npm run build
+          VITE_BASE_PATH: /${{ github.event.repository.name }}/
+        run: npm run build:dashboard
+      - name: Verify Frontend Bundle Has No Private Credentials
+        run: npm run security:check
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

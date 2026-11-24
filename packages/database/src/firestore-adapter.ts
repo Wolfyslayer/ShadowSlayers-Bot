@@ -1,4 +1,4 @@
-import { cert, getApps, initializeApp, type App } from 'firebase-admin/app';
+import { cert, deleteApp, getApps, initializeApp, type App } from 'firebase-admin/app';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import type { FirebaseAdminConfig } from '../../config/src/env.ts';
 import type {
@@ -151,6 +151,15 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
 
   isConnected(): boolean {
     return this.connected;
+  }
+
+  async close(): Promise<void> {
+    if (this.app) {
+      await deleteApp(this.app);
+      this.app = null;
+      this.client = null;
+    }
+    this.connected = false;
   }
 
   private getClient(): FirestoreClientLike {
@@ -442,7 +451,9 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
     await this.withRetry(`appendAuditLog:${safeGuildId}`, async () => {
       const guildRef = db.collection('guilds').doc(safeGuildId);
       const guildSnap = await guildRef.get();
-      if (!guildSnap.exists) return;
+      if (!guildSnap.exists) {
+        throw new Error(`[Firestore] Cannot append audit log: guild "${safeGuildId}" does not exist.`);
+      }
 
       const logRef = guildRef.collection('logs').doc(safeLogId);
       await logRef.set(
@@ -492,7 +503,9 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
 
         await db.runTransaction(async (tx) => {
           const [guildSnap, taskSnap] = await Promise.all([tx.get(guildRef), tx.get(taskRef)]);
-          if (!guildSnap.exists) return;
+          if (!guildSnap.exists) {
+            throw new Error(`[Firestore] Cannot update scheduled task: guild "${safeGuildId}" does not exist.`);
+          }
 
           const currentTask: ScheduledTask | undefined = taskSnap.exists
             ? (taskSnap.data() as unknown as ScheduledTask)
@@ -500,7 +513,9 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
                 (t) => t.id === safeTaskId,
               );
 
-          if (!currentTask) return;
+          if (!currentTask) {
+            throw new Error(`[Firestore] Cannot update scheduled task "${safeTaskId}": task does not exist.`);
+          }
           // Prevent downgrading an already completed task
           if (currentTask.status === 'completed' && patch.status && patch.status !== 'completed') {
             return;

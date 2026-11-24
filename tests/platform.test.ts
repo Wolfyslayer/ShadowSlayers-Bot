@@ -10,7 +10,7 @@ import {
   buildDiscordSlashCommandsJson,
   executeSlashCommand,
 } from '../apps/bot/src/commands/registry.ts';
-import { extractDiscordInteractionArgs } from '../apps/bot/src/index.ts';
+import { extractDiscordInteractionArgs, ShadowSlayersBotClient } from '../apps/bot/src/index.ts';
 import {
   createSetupSession,
   handleSetupButtonAction,
@@ -53,6 +53,7 @@ import {
 import {
   resolveAuthorizedDiscordOAuthSession,
   revalidateDiscordOAuthSession,
+  sessionCanAccessGuild,
 } from '../packages/permissions/src/oauth-authz.ts';
 import {
   LEGACY_CATEGORY_SPECS,
@@ -539,6 +540,19 @@ test('Discord OAuth2 authorization enforces default-deny guild membership and li
   assert.equal(authorizedCouncil.session?.clanRank, '🛡️ Shadow Council');
 });
 
+test('Guild-bound admin sessions cannot access another guild database path', () => {
+  assert.equal(sessionCanAccessGuild({ guildId: 'guild-one' }, 'guild-one', 'guild-one'), true);
+  assert.equal(sessionCanAccessGuild({ guildId: 'guild-one' }, 'guild-two', 'guild-one'), false);
+  assert.equal(sessionCanAccessGuild({}, 'guild-one', 'guild-one'), true);
+});
+
+test('Standalone bot rejects missing credentials instead of silently entering standby', async () => {
+  const db = new LocalPersistentAdapter(path.join(os.tmpdir(), 'shadowslayers-unused-bot-test.json'), 'guild-test');
+  const bot = new ShadowSlayersBotClient(db, 'guild-test');
+  await assert.rejects(bot.start('', '123456789012345'), /DISCORD_BOT_TOKEN is required/);
+  await assert.rejects(bot.start('token', ''), /DISCORD_CLIENT_ID is required/);
+});
+
 test('Moderation execution rejects offline execution and distinguishes verified_live vs failed Discord responses', async () => {
   const tmpFile = path.join(os.tmpdir(), `shadowslayers-mod-${Date.now()}.json`);
   const db = new LocalPersistentAdapter(tmpFile, 'shadowslayers-primary');
@@ -617,6 +631,28 @@ test('Database adapter refuses silent fallback to local JSON when firestore or s
     () => createDatabaseAdapter('supabase', '.data/test.json', 'shadowslayers-primary', 'production'),
     /Silent fallback to local JSON storage is forbidden/,
   );
+});
+
+test('Database adapter surfaces missing-guild audit and scheduled-task writes', async () => {
+  const tmpFile = path.join(os.tmpdir(), `shadowslayers-missing-record-${Date.now()}.json`);
+  const db = new LocalPersistentAdapter(tmpFile, 'guild-present');
+  await db.init();
+
+  await assert.rejects(db.appendAuditLog('guild-missing', {
+    id: 'log-missing',
+    guildId: 'guild-missing',
+    category: 'config_change',
+    actorId: 'admin',
+    actorName: 'Admin',
+    targetId: null,
+    targetName: null,
+    summary: 'Should not be dropped silently',
+    details: {},
+    createdAt: new Date().toISOString(),
+  }), /guild "guild-missing" does not exist/);
+  await assert.rejects(db.updateTaskStatus('guild-present', 'task-missing', { status: 'failed' }), /task does not exist/);
+
+  fs.rmSync(tmpFile, { force: true });
 });
 
 test('Schema migration v1/v2 -> v3 preserves members, initializes Phase 0.2 fields, and normalizes legacy ranks', () => {

@@ -2,7 +2,7 @@
 
 ## 1. Credential & Secret Boundaries
 - **Frontend (GitHub Pages / Vite SPA)**: Zero private secrets. Never contains `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_SECRET`, `FIREBASE_PRIVATE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, or `SESSION_SECRET`.
-- **Trusted Backend (`server.ts` / Lunafy Node.js)**: All Discord Bot API requests, OAuth2 token exchanges, password verification, and privileged database mutations execute exclusively server-side.
+- **Trusted Runtime**: `apps/bot/src/main.ts` runs on Lunafy and owns the Discord Gateway and Firestore Admin SDK. The separate `server.ts` API owns OAuth2 exchanges, admin-session verification, capability checks, and trusted database routes. The API is not deployed to Lunafy and currently does not have a control connection to the bot.
 
 ## 2. Authentication & Session Model
 - **Discord OAuth2 (Popup + State Verification + Default-Deny)**:
@@ -10,9 +10,9 @@
   2. Popup opens Discord's `https://discord.com/oauth2/authorize` directly (works safely inside cross-origin iframes).
   3. `/auth/callback` verifies `state`, exchanges `code` server-side, fetches `/users/@me` and `/users/@me/guilds` (plus live guild member roles via Bot REST when `DISCORD_BOT_TOKEN` is configured), and enforces `resolveAuthorizedDiscordOAuthSession()`: users lacking verified membership in `DISCORD_GUILD_ID` OR lacking an authorized leadership rank (`👑 Shadow King`, `🛡️ Shadow Council`, `⚔️ Warlord`, unless explicitly configured in `ADMIN_DISCORD_USER_IDS`) are **denied by default (HTTP 403)**.
   4. `postMessage` and CORS restrict origins explicitly to configured `APP_URL` / `ALLOWED_ORIGINS` (never wildcard `*`).
-- **First-Run Admin Claim Fallback (Zero Secrets Configured)**:
-  - When `ADMIN_PASSCODE` is unset and no local admin hash exists, the login screen provides an inline one-time admin claim form.
-  - Password is salted and hashed using Node `crypto.scryptSync` and stored server-side. Once claimed (or when `ADMIN_PASSCODE` env var is set), the bootstrap route locks permanently.
+- **First-Run Admin Claim**:
+  - The inline one-time claim remains available only outside production. Production startup requires an explicitly configured `ADMIN_PASSCODE`; the unauthenticated claim route returns 403 in production.
+  - The unauthenticated claim route is also disabled for Firestore, even in development. On local JSON development only, the passcode is salted and hashed using Node `crypto.scryptSync` and stored locally.
 - **Session Transport**:
   - Client holds bearer token in React memory only (never `localStorage` or `sessionStorage`), paired with `Authorization: Bearer <token>` headers and `Origin`/`X-Requested-With` verification on mutations.
 
@@ -45,4 +45,12 @@ Clan rank hierarchy (`👑 Shadow King` > `🛡️ Shadow Council` > `⚔️ War
 5. **Offline Discord Operation Safety**:
    - Actions requiring Discord state changes (moderation, role panel publishing, rules publishing, onboarding role assignments, language channel creation) require an active Discord Gateway connection.
    - If the bot is offline or Discord returns an error, the database state is preserved untouched and the request returns HTTP 503 or 502 with a failed-attempt audit log entry.
+
+## 6. Guild, Firebase, and Deployment Boundaries
+- The API validates `:guildId` and checks it against the authenticated session's guild ID before accessing a guild document. The dashboard uses the returned session guild ID rather than a hard-coded primary guild.
+- Firebase Admin credentials are server-only. Firestore Security Rules deny client access by default; the dashboard has no Firebase client SDK or Firebase Auth identity, so no direct browser read/write path is currently permitted. Do not weaken rules to make the Pages app appear functional.
+- Production API sessions require a configured `SESSION_SECRET`; production bot and API processes require Firestore. Configure the production initial admin password before deploying, because production first-run claim is disabled.
+- `VITE_API_BASE_URL` is public origin configuration only, not a credential. The browser validates HTTPS (except localhost development) and rejects embedded credentials, query strings, and fragments. Never put private credentials in any `VITE_` variable.
+- The GitHub Pages build is static and contains no Discord bot token, OAuth client secret, session secret, or Firebase Admin private key. The frontend build does not require Discord credentials.
+- The separate API currently cannot perform live Gateway operations; the impacted routes must fail closed until a trusted bot-control mechanism is deployed. The API must never open a second bot Gateway on Lunafy.
 

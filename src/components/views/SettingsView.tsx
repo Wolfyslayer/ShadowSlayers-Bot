@@ -87,7 +87,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="rounded-xl border border-slate-800 bg-[#121620] p-6 space-y-2 text-xs text-slate-300">
             <h3 className="font-display text-base font-semibold text-slate-100">Hosting & Security Posture</h3>
             <p>Active Database Adapter: <span className="font-mono-tabular text-amber-400">{databaseAdapter}</span></p>
-            <p>Dashboard API Origin: <span className="font-mono-tabular text-slate-200">{import.meta.env.VITE_API_BASE_URL || 'Same-Origin (/api)'}</span></p>
+            <p>Dashboard API Origin: <span className="font-mono-tabular text-slate-200">{import.meta.env.VITE_API_BASE_URL || 'Not configured'}</span></p>
             <p>Bot Architecture: Single centralized Discord Gateway client in <span className="font-mono-tabular">apps/bot/src/index.ts</span></p>
             <p>AI Functionality: Disabled by design (0% AI dependencies)</p>
           </div>

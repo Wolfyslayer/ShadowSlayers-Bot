@@ -45,6 +45,7 @@ import { CommunityView } from './components/views/CommunityView';
 import { ClanView } from './components/views/ClanView';
 import { CommandsView, type CommandDesc } from './components/views/CommandsView';
 import { SettingsView } from './components/views/SettingsView';
+import guildCrestUrl from './assets/images/crest_shadowslayers_1795519523634.jpg';
 
 const NAV_ITEMS = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -87,7 +88,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const guildId = 'shadowslayers-primary';
+  const guildId = user?.guildId || 'shadowslayers-primary';
 
   const refreshState = useCallback(async () => {
     if (!token) return;
@@ -143,7 +144,7 @@ export default function App() {
         <div className="h-16 px-5 border-b border-slate-800/90 flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0">
             <img
-              src="/src/assets/images/crest_shadowslayers_1795519523634.jpg"
+              src={guildCrestUrl}
               alt="ShadowSlayers Crest"
               referrerPolicy="no-referrer"
               className="w-9 h-9 rounded-md object-cover border border-amber-500/40 shrink-0"

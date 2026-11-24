@@ -1,8 +1,5 @@
 import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
 import express, { type NextFunction, type Request, type Response } from 'express';
-import { createServer as createViteServer } from 'vite';
 import { loadEnv } from './packages/config/src/env.ts';
 import { createDatabaseAdapter } from './packages/database/src/adapter.ts';
 import {
@@ -21,6 +18,7 @@ import {
 import {
   resolveAuthorizedDiscordOAuthSession,
   revalidateDiscordOAuthSession,
+  sessionCanAccessGuild,
 } from './packages/permissions/src/oauth-authz.ts';
 import type { AuthUserSession, GuildState, LogCategory } from './packages/shared/src/types.ts';
 import {
@@ -50,7 +48,6 @@ import {
   computeMemberOnboardingStatus,
   grantActivePlayerRecruit,
 } from './apps/bot/src/services/onboarding.ts';
-import { PersistentTaskScheduler } from './apps/bot/src/services/scheduler.ts';
 
 interface AuthenticatedRequest extends Request {
   sessionUser?: AuthUserSession;
@@ -122,10 +119,38 @@ function escapeHtml(raw: string): string {
 }
 
 async function bootstrap() {
-  if (env.nodeEnv === 'production' && env.databaseAdapter === 'local') {
-    console.warn(
-      '[ShadowSlayers] WARNING: Running production server with local JSON file adapter. Persistent Firestore is strongly recommended for Lunafy deployments.',
-    );
+  if (env.nodeEnv === 'production') {
+    let appUrl: URL;
+    try {
+      appUrl = new URL(env.appUrl);
+    } catch {
+      throw new Error('APP_URL must be an absolute HTTPS URL in production.');
+    }
+    if (
+      appUrl.protocol !== 'https:' ||
+      appUrl.origin !== env.appUrl ||
+      appUrl.username ||
+      appUrl.password ||
+      appUrl.search ||
+      appUrl.hash
+    ) {
+      throw new Error('APP_URL must be an HTTPS origin without credentials, path, query, or fragment in production.');
+    }
+  }
+  if (env.nodeEnv === 'production' && !env.sessionSecret) {
+    throw new Error('SESSION_SECRET must be configured for production API sessions.');
+  }
+  if (env.nodeEnv === 'production' && env.sessionSecret.length < 32) {
+    throw new Error('SESSION_SECRET must contain at least 32 characters in production.');
+  }
+  if (env.nodeEnv === 'production' && !env.adminPasscode.trim()) {
+    throw new Error('ADMIN_PASSCODE must be configured in production; first-run claiming is disabled.');
+  }
+  if (env.nodeEnv === 'production' && env.databaseAdapter !== 'firestore') {
+    throw new Error('Production API deployments require DATABASE_ADAPTER=firestore.');
+  }
+  if (env.nodeEnv === 'production' && !/^\d{15,22}$/.test(env.discordGuildId)) {
+    throw new Error('DISCORD_GUILD_ID must be configured as a numeric guild ID in production.');
   }
   const db = createDatabaseAdapter(
     env.databaseAdapter,
@@ -136,11 +161,8 @@ async function bootstrap() {
   );
   await db.init();
 
-  const scheduler = new PersistentTaskScheduler(db);
-  scheduler.start(30_000);
-
+  // The trusted API is deployed separately; only the standalone bot owns a Discord Gateway.
   const botClient = new ShadowSlayersBotClient(db, env.discordGuildId);
-  void botClient.start(env.discordBotToken, env.discordClientId, env.discordCommandScope);
 
   const automodEngine = new RuleBasedAutoModEngine();
   const app = express();
@@ -242,6 +264,14 @@ async function bootstrap() {
         activeSession = reval.updatedSession;
       }
 
+      if (
+        req.params.guildId &&
+        !sessionCanAccessGuild(activeSession, req.params.guildId, env.discordGuildId)
+      ) {
+        res.status(403).json({ error: 'This session is not authorized for the requested guild.' });
+        return;
+      }
+
       if (capability && !hasCapability(activeSession.clanRank, capability)) {
         res.status(403).json({ error: `Missing permission capability: ${capability}` });
         return;
@@ -302,6 +332,10 @@ async function bootstrap() {
 
   // One-time first-run admin claim (locks permanently once claimed or when ADMIN_PASSCODE is configured)
   app.post('/api/auth/claim-admin', rateLimit(10, 60_000), async (req, res) => {
+    if (env.nodeEnv === 'production' || env.databaseAdapter === 'firestore') {
+      res.status(403).json({ error: 'First-run admin claiming is disabled for production and Firestore. Configure ADMIN_PASSCODE before startup.' });
+      return;
+    }
     if (env.adminPasscode.trim().length > 0) {
       res.status(403).json({ error: 'Admin passcode is managed via server environment secret.' });
       return;
@@ -339,6 +373,7 @@ async function bootstrap() {
       provider: 'admin_passcode',
       clanRank: '👑 Shadow King',
       guildVerified: true,
+      guildId: env.discordGuildId,
       discordRoleIds: [],
       permissions: getCapabilitiesForRank('👑 Shadow King'),
       expiresAt: new Date(Date.now() + 12 * 3600_000).toISOString(),
@@ -385,6 +420,7 @@ async function bootstrap() {
       provider: 'admin_passcode',
       clanRank: '👑 Shadow King',
       guildVerified: true,
+      guildId: env.discordGuildId,
       discordRoleIds: [],
       permissions: getCapabilitiesForRank('👑 Shadow King'),
       expiresAt: new Date(Date.now() + 12 * 3600_000).toISOString(),
@@ -2124,8 +2160,7 @@ async function bootstrap() {
 
   // Manual scheduler tick
   app.post('/api/guild/:guildId/scheduler/tick', requireAuth('settings.manage'), async (_req, res) => {
-    const executed = await scheduler.tick();
-    res.json({ executed });
+    res.status(503).json({ error: 'The persistent scheduler is owned by the bot process; API-triggered ticks are unavailable.' });
   });
 
   // Settings & Modules
@@ -2188,25 +2223,8 @@ async function bootstrap() {
     });
   });
 
-  // Serve Vite in development or static dist in production
-  if (env.nodeEnv !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distDir = path.resolve(process.cwd(), 'dist');
-    if (fs.existsSync(distDir)) {
-      app.use(express.static(distDir));
-      app.get('*', (_req, res) => {
-        res.sendFile(path.join(distDir, 'index.html'));
-      });
-    }
-  }
-
   app.listen(env.port, '0.0.0.0', () => {
-    console.log(`[ShadowSlayers] Server listening on http://0.0.0.0:${env.port} (adapter=${db.driverName})`);
+    console.log(`[ShadowSlayers] Trusted API listening on http://0.0.0.0:${env.port} (adapter=${db.driverName})`);
   });
 }
 

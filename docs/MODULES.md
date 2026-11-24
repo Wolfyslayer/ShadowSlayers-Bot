@@ -1,5 +1,12 @@
 # System Modules – ShadowSlayers – Legends of Elements
 
+## Runtime Boundaries
+
+- **Bot (`apps/bot/src/main.ts`)** owns the sole Discord Gateway connection and persistent scheduler. Its production install uses `npm ci --omit=dev`; compiled output is `dist-bot/`.
+- **Dashboard (`src/`)** is a static GitHub Pages SPA built to `dist/`; it has no Discord or Firebase Admin credentials.
+- **Trusted API (`server.ts`)** is a separate API-only service built to `dist-api/`. It owns authentication and privileged Firestore access, but does not start a bot or scheduler. Live Discord-dependent dashboard mutations remain blocked until an authenticated API-to-bot control path exists.
+- Firebase client operations: none currently approved. The current schema, Firebase Auth setup, Firestore rules, and session model are not aligned for direct browser access.
+
 1. **Discovery & Setup Engine (`apps/bot/src/services/discovery.ts`, `apps/bot/src/commands/setup.ts`)** — Maps all 9 legacy categories, 32 text channels, 5 voice channels, and 16 legacy roles (`👑 Shadow King` manual-only), flags misplaced channels, type mismatches, permission drifts, and ambiguous conflicts, and runs an ephemeral initiator-locked `/setup` confirmation flow.
 2. **Dynamic Multilingual Engine (`packages/localization/src/engine.ts`)** — Supports English (`en`), Russian (`ru`), and unlimited admin-created languages (e.g., Swedish `sv`) via templates, manual translation editing, completeness scoring, review approval, and non-destructive channel generation previews. Creating language categories on Discord requires an active Discord connection (offline returns 503 without mutating state).
 3. **5-Step Onboarding & Verification (`apps/bot/src/services/onboarding.ts`)** — Isolates new members in `📜 01 — GATE OF SHADOWS` until `📜・rules` `✅` acceptance grants `✅ Verified`, tracks Language (Step 2), Class (Step 3), optional Notifications (Step 4), and gates `🌱 Recruit` on Step 5 active-player confirmation while preserving unrelated roles on `✅` removal. Unranked members remain `clanRank: null` (never defaulted to `'🌱 Recruit'`). Role grants require an active Discord connection; offline requests return 503 without updating database records.

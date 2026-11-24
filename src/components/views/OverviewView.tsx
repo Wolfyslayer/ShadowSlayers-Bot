@@ -1,5 +1,6 @@
 import React from 'react';
 import type { GuildState } from '../../../packages/shared/src/types';
+import bannerUrl from '../../assets/images/banner_sanctum_1795519524069.jpg';
 
 interface BotStatus {
   connected: boolean;
@@ -67,7 +68,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
 
           <div className="lg:col-span-5 relative min-h-[200px] lg:min-h-full bg-[#0B0D12]">
             <img
-              src="/src/assets/images/banner_sanctum_1795519524069.jpg"
+              src={bannerUrl}
               alt="ShadowSlayers Sanctum Hall"
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover opacity-80"
@@ -112,7 +113,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
         <div className="p-5 rounded-xl border border-slate-800 bg-[#121620]">
           <p className="text-xs text-slate-400">Gateway & Persistence</p>
           <p className="font-mono-tabular text-lg font-semibold text-slate-100 mt-1 truncate">
-            {botStatus.connected ? botStatus.botTag || 'Connected' : 'API Ready (No Bot Token)'}
+            {botStatus.connected ? botStatus.botTag || 'Connected' : 'Bot control connection unavailable'}
           </p>
           <p className="text-xs text-slate-400 mt-2">
             Adapter: {databaseAdapter} · Tasks queued: {pendingTasks.length}

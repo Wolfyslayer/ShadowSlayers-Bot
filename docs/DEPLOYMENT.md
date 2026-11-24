@@ -1,56 +1,98 @@
-# Deployment & Operations Guide
+# Deployment & Operations
 
-## 1. Architecture Summary
-- **Source of Truth**: GitHub repository
-- **Bot & API Runtime**: Lunafy (Persistent Node.js) running `npm start` (`server.ts` + Discord Gateway)
-- **Web Dashboard**: GitHub Pages static build (`npm run build` -> `dist/`)
-- **Database**: Firebase Spark (Firestore) in production via server-side credentials, or `LocalPersistentAdapter` for standalone/preview execution
+## Architecture
 
-## 2. GitHub Pages Dashboard Setup
-1. Set repository secret/variable `VITE_API_BASE_URL` to your Lunafy HTTPS API origin (e.g. `https://bot.yourdomain.com`).
-2. Push to `main` — `.github/workflows/deploy-pages.yml` builds the React dashboard without any backend secrets and publishes `dist/` to GitHub Pages.
-3. Add the GitHub Pages origin to `APP_URL` / CORS allowlist on your Lunafy backend.
+- **Lunafy:** one persistent Node.js 22 process running the compiled Discord bot only. No Express, Vite, dashboard files, HTTP listener, inbound port, or scheduler API.
+- **GitHub Pages:** static Vite dashboard only.
+- **Trusted API:** separate Node.js service built from `server.ts`; it serves authenticated `/api/*` routes and OAuth callbacks but does not start a Discord Gateway or scheduler. It must not be deployed on Lunafy.
+- **Firestore:** shared persistent database. Bot and trusted API use Firebase Admin credentials only in their server environments.
 
-## 3. Lunafy Persistent Bot & API Setup
-1. Configure environment variables in Lunafy (never commit `.env`):
-   - `PORT=3000`
-   - `APP_URL=https://your-lunafy-domain`
-   - `DISCORD_BOT_TOKEN=...`
-   - `DISCORD_CLIENT_ID=...`
-   - `DISCORD_CLIENT_SECRET=...`
-   - `DISCORD_GUILD_ID=...`
-   - `SESSION_SECRET=...` (strong 32+ byte random string)
-   - `DATABASE_ADAPTER=firestore` (or `local` if testing)
-2. Start command: `npm start` (runs unified `server.ts`, which launches Express API, persistent TaskScheduler, and the single Discord Gateway client).
-3. If your Lunafy plan does **not** allow inbound HTTP connections, deploy only `npm run bot` on Lunafy and host the HTTP API + OAuth2 callback on Supabase Edge Functions (documented fallback).
+The API is a necessary security boundary for the current dashboard; GitHub Pages cannot call Firebase Admin or Discord privileged APIs directly. The API has not yet been connected to the Lunafy bot for Discord mutations, so operations requiring a live Discord Gateway fail closed. Do not treat the dashboard as production-complete until that control path is provided and verified.
 
-## 4. Discord OAuth2 App Configuration
-In Discord Developer Portal -> OAuth2 -> Redirects, add:
-- `<YOUR_APP_URL>/auth/callback`
-- `<YOUR_APP_URL>/auth/callback/`
+## Windows local development (PowerShell)
 
-## 5. Firebase Spark Setup (When Self-Hosted)
-1. Enable Cloud Firestore on Firebase Spark (free tier).
-2. Deploy `database/firestore.rules.template` as `firestore.rules` via `firebase deploy --only firestore:rules`.
-3. Generate a service account key in Firebase Console (Project Settings -> Service Accounts -> Generate new private key).
-4. Provide credentials to the Lunafy environment via:
-   - `FIREBASE_PROJECT_ID=your-project-id`
-   - `FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxx@your-project-id.iam.gserviceaccount.com`
-   - `FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"`
-5. Set `DATABASE_ADAPTER=firestore`.
+```powershell
+npm ci
+Copy-Item .env.example .env
+notepad .env
+```
 
-## 6. Command Registration Scope
-- `DISCORD_COMMAND_SCOPE="auto"` (default): Registers guild commands instantly if `DISCORD_GUILD_ID` is numeric snowflake, else global.
-- `DISCORD_COMMAND_SCOPE="guild"`: Forces immediate guild-scoped slash command registration.
-- `DISCORD_COMMAND_SCOPE="global"`: Registers global commands across all guilds (may take up to 1 hour to propagate on Discord's edge cache).
+In `.env`, use `DATABASE_ADAPTER=local` for local tests, and configure `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, and numeric `DISCORD_GUILD_ID` before starting the live bot. Run separate terminals:
 
-## 7. CI Pipeline Discipline
-- `.github/workflows/ci.yml` strictly runs `npm ci` using the committed `package-lock.json`.
-- The pipeline executes:
-  1. `npm ci` (exact dependency tree installation)
-  2. `npm run security:check` (AI hygiene, secret leak checks, role integrity)
-  3. `npm audit --audit-level=high` (dependency security audit)
-  4. `npm run lint` (`tsc --noEmit` typecheck)
-  5. `npm test` (unit and integration tests)
-  6. `npm run build` (production Vite dashboard bundle)
+```powershell
+npm run dev:bot
+npm run dev:dashboard
+npm run dev:api
+```
 
+The dashboard's `VITE_API_BASE_URL` should point to the API origin, e.g. `http://localhost:3000`. Builds and tests do not require Discord credentials:
+
+```powershell
+npm run build:bot
+npm run build:dashboard
+npm test
+npm run lint
+```
+
+## Lunafy: bot-only deployment
+
+Build the bot on a CI/build machine using Node.js 22:
+
+```sh
+npm ci
+npm run build:bot
+```
+
+Deploy `package.json`, `package-lock.json`, and the compiled `dist-bot/` directory. Configure these variables in Lunafy:
+
+- `NODE_ENV=production`
+- `DATABASE_ADAPTER=firestore`
+- `DISCORD_BOT_TOKEN`
+- `DISCORD_CLIENT_ID`
+- `DISCORD_GUILD_ID` (numeric guild snowflake)
+- `DISCORD_COMMAND_SCOPE=auto` (or `guild` / `global`)
+- `FIREBASE_PROJECT_ID`
+- `FIREBASE_CLIENT_EMAIL`
+- `FIREBASE_PRIVATE_KEY` (newlines may be entered as `\n`)
+
+Lunafy installation and persistent startup commands:
+
+```sh
+npm ci --omit=dev
+npm run start:bot
+```
+
+Configure `npm run start:bot` as the persistent process command. It validates configuration, initializes Firestore, starts the scheduler and Discord Gateway, registers slash commands, and handles SIGINT/SIGTERM. It does not open a port. The target's exact packaging/upload workflow has not been verified against Lunafy; no workspaces are assumed.
+
+## Separate trusted API service
+
+Do not host the API on Lunafy. Use a separate persistent Node.js 22 service with the repository package files:
+
+```sh
+npm ci
+npm run build:api
+npm run start:api
+```
+
+Configure `NODE_ENV=production`, `PORT`, `APP_URL` (HTTPS origin only), `ALLOWED_ORIGINS` (include the exact GitHub Pages origin), `SESSION_SECRET` (32+ characters), `ADMIN_PASSCODE`, `DATABASE_ADAPTER=firestore`, Firebase Admin credentials, and Discord OAuth client ID/secret as needed. A Discord bot token may be needed for OAuth membership checks. Never expose these settings to the frontend. The service currently has no Gateway connection, so Gateway-dependent routes deliberately return unavailable; the service is not yet a full substitute for the former combined process.
+
+## GitHub Pages
+
+1. Enable GitHub Pages with GitHub Actions as the source.
+2. Set repository **variable** `VITE_API_BASE_URL` to the public HTTPS origin of the separate trusted API (origin only, no credentials or query string). It is configuration, not a secret.
+3. The workflow supplies `VITE_BASE_PATH` from the repository name, executes `npm run build:dashboard`, and uploads `dist/`. No bot or Firebase credential is needed.
+4. Configure the API's `ALLOWED_ORIGINS` for the published Pages origin. OAuth2 redirect URLs must target the trusted API's `/auth/callback`.
+
+If `VITE_API_BASE_URL` is unset, the static build still succeeds, but authentication/data requests cannot reach an API. Pages deployment never builds or restarts the bot.
+
+## Firebase setup
+
+1. Create a Firebase project and enable Cloud Firestore.
+2. Review and deploy `database/firestore.rules.template`. It denies browser access by default; the current dashboard has no Firebase client SDK authentication or direct Firestore operation.
+3. Create a server-side service identity with the minimum required Firestore IAM permissions.
+4. Configure the three `FIREBASE_*` Admin values in Lunafy and the trusted API host only. Never commit a service-account JSON file or place an Admin credential in a `VITE_` variable.
+5. Firestore Admin SDK requests bypass Firestore Security Rules. Preserve the API's authentication, guild-ID validation, capability checks, and audit writes; Firestore rules do not replace these controls.
+
+## CI
+
+GitHub Actions uses Node.js 22 and `npm ci`. Independent bot and dashboard jobs build without live Discord/Firebase credentials. A separate quality job runs `npm test`, `npm run lint`, `npm run security:check`, and `npm audit --audit-level=high`.

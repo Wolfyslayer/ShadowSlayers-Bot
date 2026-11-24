@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { KeyRound, Shield, Lock } from 'lucide-react';
 import type { AuthUserSession } from '../../packages/shared/src/types';
 import { apiRequest } from '../lib/api';
+import bannerUrl from '../assets/images/banner_sanctum_1795519524069.jpg';
+import guildCrestUrl from '../assets/images/crest_shadowslayers_1795519523634.jpg';
 
 interface AuthStatus {
   discordOAuthConfigured: boolean;
@@ -122,7 +124,7 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onAuthenticated }) => {
       <div className="w-full max-w-4xl grid grid-cols-1 lg:grid-cols-2 border border-slate-800 bg-[#121620] rounded-xl overflow-hidden">
         <div className="relative min-h-[260px] lg:min-h-[520px] bg-[#0E1119] border-b lg:border-b-0 lg:border-r border-slate-800 flex flex-col justify-between p-8">
           <img
-            src="/src/assets/images/banner_sanctum_1795519524069.jpg"
+            src={bannerUrl}
             alt="ShadowSlayers Obsidian Sanctum"
             referrerPolicy="no-referrer"
             className="absolute inset-0 w-full h-full object-cover opacity-35"
@@ -131,7 +133,7 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onAuthenticated }) => {
 
           <div className="relative z-10 flex items-center gap-4">
             <img
-              src="/src/assets/images/crest_shadowslayers_1795519523634.jpg"
+              src={guildCrestUrl}
               alt="ShadowSlayers Guild Crest"
               referrerPolicy="no-referrer"
               className="w-14 h-14 rounded-lg object-cover border border-amber-500/40"

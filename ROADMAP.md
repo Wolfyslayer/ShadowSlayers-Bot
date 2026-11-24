@@ -6,11 +6,11 @@
 
 | Metric | Status |
 | :--- | :--- |
-| **Current Phase** | Phase 0.3 – ShadowSlayers Technical Corrections & Verification (Directly on `main`) |
+| **Current Phase** | Phase 0.4 – NPM-only Migration & Independent Applications (in progress on `main`) |
 | **Verification Model** | Every phase tracks 5 gates: **Implemented**, **Automated Tests Passed**, **Live Discord Test Passed**, **Reviewed & Approved**, **Deployed** |
-| **Automated Implementation Progress** | Phase 0.3 Technical Corrections complete (package-lock.json & npm ci, real Discord.js slash command options, FirestoreDatabaseAdapter with Firebase Admin SDK, offline false-success elimination, null clanRank security hardening, XSS escaping, dynamic OAuth2 re-verification, safeIdSchema validation). All **21/21 automated unit & integration test suites passed**. |
-| **Blocked / External Dependencies** | Live Discord Server Gateway verification pending (`DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`); live Cloud Firestore credentials pending (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`); GitHub remote origin push pending (`git remote` not configured in sandbox). |
-| **Test Status** | 21/21 automated test suites passed (`tests/platform.test.ts`, `tests/firestore-adapter.test.ts`, `scripts/security-check.cjs`). Mocked/automated tests are strictly distinguished from live Discord/Firestore server tests. |
+| **Automated Implementation Progress** | Phase 0.3 foundations remain in place. Phase 0.4 is partial: npm-only scripts and lockfile, standalone bot lifecycle, isolated API/static builds, guild-bound API sessions, and truthful deployment docs are implemented; independent API-to-bot control and live service configuration remain incomplete. |
+| **Blocked / External Dependencies** | Dashboard Discord mutations require a trusted API-to-bot control path. Live Discord verification needs user-provided bot credentials; live Firestore verification needs Firebase Admin credentials; Pages deployment needs API origin/configuration. Lunafy package/upload workflow has not been validated. |
+| **Test Status** | Current Windows verification: `npm ci`, `npm run lint`, 24 automated tests, `npm run security:check`, `npm audit --audit-level=high`, bot/dashboard/API builds, and standalone startup validation passed. No live Discord, Firebase, Pages, or Lunafy test was performed. |
 
 ---
 
@@ -80,8 +80,25 @@
   - [x] **Automated Test Suite**: Verified 21/21 test suites passing locally via `npm test`, `npm run lint` (`tsc --noEmit`), `npm run security:check`, and `npm audit --audit-level=high`.
   - [ ] **Live Discord Gateway Verification**: Blocked in current environment without user-provided Discord Bot credentials.
   - [ ] **Live Cloud Firestore Verification**: Blocked in current environment without user-provided Firebase Admin service account keys.
-  - [ ] **GitHub Remote Push**: Blocked in current environment without user-configured GitHub remote origin.
+  - [ ] **GitHub Remote Push**: Not performed as part of this phase.
 
+## Phase 0.4 – NPM-only Migration & Independent Applications
+- **Goals**: Use npm on Windows/Linux, run the bot without Express/Vite, build the static dashboard independently, and place the trusted API outside Lunafy without weakening auth or Firestore boundaries.
+- **Status**: In progress; **do not mark complete** until the dashboard's Discord-dependent operations have a verified separate bot-control backend.
+- **Implemented in this change**:
+  - [x] Remove the direct Linux-only TypeScript package that blocked Windows `npm ci`; retain Node.js 22 in CI.
+  - [x] Remove the obsolete non-npm lockfile; add cross-platform npm scripts and Node-based cleaning.
+  - [x] Add an executable bot bootstrap with config validation, Firestore selection, persistent scheduler ownership, slash-command registration, graceful shutdown, and startup error propagation.
+  - [x] Split bot, dashboard, and trusted API entry/build outputs; keep API and dashboard off Lunafy.
+  - [x] Bind API guild routes to the authenticated session guild and disable unauthenticated first-run admin claiming in production.
+  - [x] Audit dashboard API routes and document why direct browser Firestore access is not currently authorized.
+  - [x] Keep GitHub Pages build independent of Discord credentials and set its repository base path.
+- **Automated verification**: `npm ci` and `npm ci --omit=dev` succeeded on the current Windows environment; production-only dependencies omitted Express, Vite, and tsx. `npm run lint`, 24 tests, security check (including built frontend credential scan), high-severity audit, `build:bot`, `build:dashboard` with `/ShadowSlayers-Bot/` base, `build:api`, and standalone missing-config startup check passed.
+- **Remaining blockers / gates**:
+  - [ ] Implement and verify a secure API-to-bot control path for discovery, publishing, role grants, moderation, and other live Discord operations.
+  - [ ] Configure Firebase Auth and redesign Firestore schema/rules before considering any direct Firebase client SDK operation.
+  - [ ] Verify Lunafy artifact installation/start behavior and live bot + Firestore operation with user-controlled credentials.
+  - [ ] Configure a trusted API origin and verify Pages OAuth/API operation without exposing private variables.
 
 ## Phase 1 – Discord Core
 - **Goals**: Build a single, centralized Discord Gateway client in Node.js for Lunafy hosting with automatic recovery and slash-command registration.
@@ -293,17 +310,18 @@
 - **Documentation Requirements**: `MODULES.md`, `DATABASE.md`.
 
 ## Phase 15 – Administration Dashboard
-- **Goals**: Production-grade, responsive dark fantasy React web dashboard hosted cleanly via GitHub Pages or unified Express runtime.
-- **Features**: All 14 dashboard workspaces, mobile/tablet/desktop responsiveness, Discord OAuth2 + secure `scrypt` admin authentication.
+- **Goals**: Static dark fantasy React dashboard on GitHub Pages, connected only to a separately hosted trusted API.
+- **Features**: 14 dashboard workspaces, responsive UI, server-side Discord OAuth2 + secure `scrypt` admin authentication. Static hosting alone does not provide API functionality.
 - **Required Files**: `src/App.tsx`, `src/components/**/*`, `server.ts`.
 - **Dependencies**: Phases 1–14.
 - **Implementation Tasks**:
   - [x] Build Obsidian Sanctum dark fantasy design system (`Cinzel`, `Plus Jakarta Sans`, `JetBrains Mono`)
   - [x] Implement Discord OAuth2 popup flow + `scrypt` first-run admin claim fallback
-  - [x] Implement all 14 live interactive dashboard modules wired to persistent API
+  - [x] Implement all 14 dashboard modules wired to authenticated API routes
+  - [ ] Verify feature-complete operation with a separately hosted API and secure API-to-bot control path
   - [x] Verify responsive layout and production bundle compilation
-- **Acceptance Criteria**: Every button/form persists real state to DB; zero private secrets in frontend bundle; responsive sidebar drawer works on mobile.
-- **Tests**: `vite build` & `tsc --noEmit` passed.
+- **Acceptance Criteria**: API-backed forms use a real authenticated service, no private secrets are in the frontend bundle, and Discord-dependent actions are connected to the bot.
+- **Tests**: Static build/typecheck require CI re-verification; live service integration is not verified.
 - **Risks**: Cross-origin iframe cookie blocking during preview OAuth (mitigated via Bearer session in memory).
 - **Documentation Requirements**: `ARCHITECTURE.md`, `SECURITY.md`.
 
@@ -323,13 +341,13 @@
 
 ## Phase 17 – Final Quality Assurance
 - **Goals**: Verify TypeScript safety, automated tests, security invariants, responsiveness, and documentation accuracy.
-- **Features**: Full `tsc --noEmit`, `npm test`, `npm run build`, security audit of API routes and `.env.example`.
+- **Features**: Full `tsc --noEmit`, `npm test`, independent app builds, and security audit of API routes and `.env.example`.
 - **Required Files**: `tests/platform.test.ts`.
 - **Dependencies**: Phases 0–16.
 - **Implementation Tasks**:
   - [x] Execute unit & integration test suite across permissions, localization, AutoMod, XP, and scheduler
-  - [x] Run `npm run lint` (`tsc --noEmit`) and `npm run build`
-  - [x] Verify live Express API + Dashboard runtime flows
+  - [x] Run `npm run lint` (`tsc --noEmit`) and application builds
+  - [ ] Verify deployed trusted API + GitHub Pages + bot control-plane flows (not yet implemented)
   - [x] Update `ROADMAP.md` completion metrics truthfully
 - **Acceptance Criteria**: 100% test pass rate, clean TypeScript build, zero exposed secrets, zero AI dependencies.
 - **Tests**: 6/6 tests passing (`npm test`).
@@ -337,16 +355,17 @@
 - **Documentation Requirements**: Updated `ROADMAP.md`.
 
 ## Phase 18 – Deployment and Launch
-- **Goals**: Prepare repeatable deployment configuration for GitHub, GitHub Pages, Lunafy, and Firebase Spark (or Supabase fallback).
+- **Goals**: Prepare repeatable deployment configuration for GitHub, GitHub Pages, Lunafy, a separate trusted API, and Firebase.
 - **Features**: GitHub Actions CI + Pages deploy workflow, Lunafy Node.js startup entry, Firestore security rules template, backup/recovery guide.
 - **Required Files**: `.github/workflows/ci.yml`, `.github/workflows/deploy-pages.yml`, `database/firestore.rules.template`, `docs/DEPLOYMENT.md`.
 - **Dependencies**: Phase 17.
 - **Implementation Tasks**:
   - [ ] Push repository to user's GitHub remote
-  - [ ] Configure `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, and `DISCORD_GUILD_ID` on Lunafy
+  - [ ] Configure `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, and Firestore Admin variables on Lunafy
+  - [ ] Deploy the trusted API separately with a stable `SESSION_SECRET` and no Discord Gateway
   - [ ] Provision external Firebase Spark project & deploy `database/firestore.rules.template`
   - [ ] Set `VITE_API_BASE_URL` variable in GitHub repo and enable GitHub Pages deployment
-- **Acceptance Criteria**: Live Discord Gateway connected on Lunafy and static dashboard served from GitHub Pages.
-- **Tests**: Production bundle build verification (`npm run build` passed).
-- **Risks**: CORS / API URL misconfiguration between GitHub Pages origin and Lunafy API origin.
+- **Acceptance Criteria**: Bot-only Lunafy process, secure external API-to-bot operations, and authenticated GitHub Pages dashboard.
+- **Tests**: Build and CI verification pending for this phase; no live Discord/Firestore claims.
+- **Risks**: API-to-bot control path and CORS/API URL configuration remain unresolved.
 - **Documentation Requirements**: `DEPLOYMENT.md`, `DATABASE.md`, `SECURITY.md`.

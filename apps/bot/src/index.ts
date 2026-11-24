@@ -769,15 +769,22 @@ export class ShadowSlayersBotClient {
     this.status.commandsRegisteredCount = payload.length;
   }
 
+  async stop(): Promise<void> {
+    if (this.client) {
+      this.client.destroy();
+      this.client = null;
+    }
+    this.status.connected = false;
+    this.status.mode = 'standby_no_token';
+  }
+
   async start(
     botToken: string,
     clientId: string,
     commandScope: DiscordCommandScope = 'auto',
   ): Promise<void> {
-    if (!botToken) {
-      this.status.mode = 'standby_no_token';
-      return;
-    }
+    if (!botToken) throw new Error('DISCORD_BOT_TOKEN is required to start the Discord bot.');
+    if (!clientId) throw new Error('DISCORD_CLIENT_ID is required to register Discord slash commands.');
 
     this.client = new Client({
       intents: [
@@ -790,45 +797,55 @@ export class ShadowSlayersBotClient {
       partials: [Partials.Message, Partials.Reaction, Partials.User],
     });
 
-    this.client.once(Events.ClientReady, async (readyClient) => {
-      this.status = {
-        connected: true,
-        mode: 'live_gateway',
-        botTag: readyClient.user.tag,
-        guildCount: readyClient.guilds.cache.size,
-        lastError: null,
-        startedAt: new Date().toISOString(),
-        commandsScope: this.status.commandsScope,
-        commandsRegisteredCount: this.status.commandsRegisteredCount,
-      };
+    let rejectReady!: (err: unknown) => void;
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      rejectReady = reject;
+      this.client!.once(Events.ClientReady, async (readyClient) => {
+        this.status = {
+          connected: true,
+          mode: 'live_gateway',
+          botTag: readyClient.user.tag,
+          guildCount: readyClient.guilds.cache.size,
+          lastError: null,
+          startedAt: new Date().toISOString(),
+          commandsScope: this.status.commandsScope,
+          commandsRegisteredCount: this.status.commandsRegisteredCount,
+        };
 
-      try {
-        await this.registerSlashCommands(botToken, clientId, commandScope);
+        try {
+          await this.registerSlashCommands(botToken, clientId, commandScope);
 
-        const primaryDiscordGuild = this.getLiveDiscordGuild();
-        if (primaryDiscordGuild) {
-          const guild = await this.db.getGuild(this.guildId);
-          if (guild) {
-            guild.discovery = discoverLiveDiscordGuild(primaryDiscordGuild as unknown as GuildLike, guild.discovery);
-            await this.db.saveGuild(guild);
+          const primaryDiscordGuild = this.getLiveDiscordGuild();
+          if (primaryDiscordGuild) {
+            const guild = await this.db.getGuild(this.guildId);
+            if (guild) {
+              guild.discovery = discoverLiveDiscordGuild(primaryDiscordGuild as unknown as GuildLike, guild.discovery);
+              await this.db.saveGuild(guild);
+            }
           }
+          resolve();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.status.lastError = msg;
+          try {
+            await this.db.appendAuditLog(this.guildId, {
+              id: `log-cmdreg-err-${Date.now()}`,
+              guildId: this.guildId,
+              category: 'bot_error',
+              actorId: 'bot',
+              actorName: 'Discord Gateway',
+              targetId: null,
+              targetName: null,
+              summary: `Slash command registration or startup discovery failed: ${msg}`,
+              details: {},
+              createdAt: new Date().toISOString(),
+            });
+          } catch (auditError) {
+            console.error('[ShadowSlayers] Could not audit bot startup failure:', auditError);
+          }
+          reject(err);
         }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.status.lastError = msg;
-        await this.db.appendAuditLog(this.guildId, {
-          id: `log-cmdreg-err-${Date.now()}`,
-          guildId: this.guildId,
-          category: 'bot_error',
-          actorId: 'bot',
-          actorName: 'Discord Gateway',
-          targetId: null,
-          targetName: null,
-          summary: `Slash command registration or startup discovery failed: ${msg}`,
-          details: {},
-          createdAt: new Date().toISOString(),
-        });
-      }
+      });
     });
 
     this.client.on(Events.GuildMemberUpdate, (_oldMember, newMember) => {
@@ -843,18 +860,23 @@ export class ShadowSlayersBotClient {
 
     this.client.on(Events.Error, (err) => {
       this.status.lastError = err.message;
-      void this.db.appendAuditLog(this.guildId, {
-        id: `log-boterr-${Date.now()}`,
-        guildId: this.guildId,
-        category: 'bot_error',
-        actorId: 'bot',
-        actorName: 'Discord Gateway',
-        targetId: null,
-        targetName: null,
-        summary: `Discord Gateway error: ${err.message}`,
-        details: {},
-        createdAt: new Date().toISOString(),
-      });
+      rejectReady(err);
+      void this.db
+        .appendAuditLog(this.guildId, {
+          id: `log-boterr-${Date.now()}`,
+          guildId: this.guildId,
+          category: 'bot_error',
+          actorId: 'bot',
+          actorName: 'Discord Gateway',
+          targetId: null,
+          targetName: null,
+          summary: `Discord Gateway error: ${err.message}`,
+          details: {},
+          createdAt: new Date().toISOString(),
+        })
+        .catch((auditError) => {
+          console.error('[ShadowSlayers] Could not audit Discord Gateway error:', auditError);
+        });
     });
 
     this.client.on(Events.MessageReactionAdd, async (reaction, user) => {
@@ -1067,9 +1089,14 @@ export class ShadowSlayersBotClient {
       }
     });
 
-    await this.client.login(botToken).catch((err) => {
+    try {
+      const loginPromise = this.client.login(botToken);
+      await Promise.all([loginPromise, readyPromise]);
+    } catch (err) {
       this.status.connected = false;
       this.status.lastError = err instanceof Error ? err.message : String(err);
-    });
+      await this.stop();
+      throw err;
+    }
   }
 }

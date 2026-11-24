@@ -30,14 +30,23 @@ export interface RuntimeEnv {
 
 export function loadEnv(): RuntimeEnv {
   const adapterRaw = (process.env.DATABASE_ADAPTER || 'local').toLowerCase();
-  const databaseAdapter: RuntimeEnv['databaseAdapter'] =
-    adapterRaw === 'firestore' || adapterRaw === 'supabase' ? adapterRaw : 'local';
+  if (adapterRaw !== 'local' && adapterRaw !== 'firestore' && adapterRaw !== 'supabase') {
+    throw new Error('DATABASE_ADAPTER must be "local" or "firestore"; Supabase is unsupported.');
+  }
+  const databaseAdapter = adapterRaw;
 
   const scopeRaw = (process.env.DISCORD_COMMAND_SCOPE || 'auto').toLowerCase();
-  const discordCommandScope: RuntimeEnv['discordCommandScope'] =
-    scopeRaw === 'guild' || scopeRaw === 'global' ? scopeRaw : 'auto';
+  if (scopeRaw !== 'auto' && scopeRaw !== 'guild' && scopeRaw !== 'global') {
+    throw new Error('DISCORD_COMMAND_SCOPE must be "auto", "guild", or "global".');
+  }
+  const discordCommandScope = scopeRaw;
+  const port = Number(process.env.PORT || 3000);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('PORT must be an integer between 1 and 65535.');
+  }
 
   const appUrl = (process.env.APP_URL || 'http://localhost:3000').replace(/\/+$/, '');
+  const nodeEnv = process.env.NODE_ENV || 'development';
   const extraOrigins = (process.env.ALLOWED_ORIGINS || '')
     .split(',')
     .map((o) => o.trim().replace(/\/+$/, ''))
@@ -55,9 +64,9 @@ export function loadEnv(): RuntimeEnv {
     projectId && clientEmail && privateKey ? { projectId, clientEmail, privateKey } : null;
 
   return {
-    port: Number(process.env.PORT || 3000),
+    port,
     appUrl,
-    nodeEnv: process.env.NODE_ENV || 'development',
+    nodeEnv,
     discordBotToken: process.env.DISCORD_BOT_TOKEN || '',
     discordClientId: process.env.DISCORD_CLIENT_ID || '',
     discordClientSecret: process.env.DISCORD_CLIENT_SECRET || '',
@@ -65,7 +74,13 @@ export function loadEnv(): RuntimeEnv {
     discordCommandScope,
     adminPasscode: process.env.ADMIN_PASSCODE || '',
     adminDiscordUserIds,
-    allowedOrigins: Array.from(new Set([appUrl, 'http://localhost:3000', 'http://127.0.0.1:3000', ...extraOrigins])),
+    allowedOrigins: Array.from(
+      new Set([
+        appUrl,
+        ...(nodeEnv === 'production' ? [] : ['http://localhost:3000', 'http://127.0.0.1:3000']),
+        ...extraOrigins,
+      ]),
+    ),
     sessionSecret: process.env.SESSION_SECRET || '',
     databaseAdapter,
     localDbPath: process.env.LOCAL_DB_PATH || '.data/shadowslayers-db.json',
