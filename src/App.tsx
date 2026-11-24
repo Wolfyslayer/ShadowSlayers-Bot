@@ -1,13 +1,24 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import {
   Activity,
+  Bell,
+  Bot,
+  ChartNoAxesColumnIncreasing,
+  ChevronDown,
+  CircleHelp,
   Compass,
+  Database,
+  FileClock,
   Gavel,
   Globe,
   LayoutDashboard,
   LogOut,
   Menu,
   MessageSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Radio,
+  Server,
   ScrollText,
   Settings,
   ShieldAlert,
@@ -31,38 +42,58 @@ import type {
 import type { CompletenessReport } from '../packages/localization/src/engine';
 import { AuthGate } from './components/AuthGate';
 import { apiRequest } from './lib/api';
-import { OverviewView } from './components/views/OverviewView';
-import { ServerManagementView } from './components/views/ServerManagementView';
-import { LanguagesView } from './components/views/LanguagesView';
-import { MembersView } from './components/views/MembersView';
-import { RolesView } from './components/views/RolesView';
-import { ModerationView } from './components/views/ModerationView';
-import { AutoModView } from './components/views/AutoModView';
-import { LoggingView } from './components/views/LoggingView';
-import { TicketsView } from './components/views/TicketsView';
-import { RecruitmentView } from './components/views/RecruitmentView';
-import { CommunityView } from './components/views/CommunityView';
-import { ClanView } from './components/views/ClanView';
-import { CommandsView, type CommandDesc } from './components/views/CommandsView';
-import { SettingsView } from './components/views/SettingsView';
+import { useLocale } from './lib/LocaleProvider';
+import type { CommandDesc } from './components/views/CommandsView';
+import { StatusPill } from './components/ui/DashboardPrimitives';
 import guildCrestUrl from './assets/images/crest_shadowslayers_1795519523634.jpg';
 
-const NAV_ITEMS = [
-  { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-  { id: 'discovery', label: 'Server Management', icon: Compass },
-  { id: 'languages', label: 'Languages', icon: Globe },
+const OverviewView = lazy(() => import('./components/views/OverviewView').then((module) => ({ default: module.OverviewView })));
+const StatisticsView = lazy(() => import('./components/views/StatisticsView').then((module) => ({ default: module.StatisticsView })));
+const ServerManagementView = lazy(() => import('./components/views/ServerManagementView').then((module) => ({ default: module.ServerManagementView })));
+const LanguagesView = lazy(() => import('./components/views/LanguagesView').then((module) => ({ default: module.LanguagesView })));
+const MembersView = lazy(() => import('./components/views/MembersView').then((module) => ({ default: module.MembersView })));
+const RolesView = lazy(() => import('./components/views/RolesView').then((module) => ({ default: module.RolesView })));
+const ModerationView = lazy(() => import('./components/views/ModerationView').then((module) => ({ default: module.ModerationView })));
+const AutoModView = lazy(() => import('./components/views/AutoModView').then((module) => ({ default: module.AutoModView })));
+const LoggingView = lazy(() => import('./components/views/LoggingView').then((module) => ({ default: module.LoggingView })));
+const TicketsView = lazy(() => import('./components/views/TicketsView').then((module) => ({ default: module.TicketsView })));
+const RecruitmentView = lazy(() => import('./components/views/RecruitmentView').then((module) => ({ default: module.RecruitmentView })));
+const CommunityView = lazy(() => import('./components/views/CommunityView').then((module) => ({ default: module.CommunityView })));
+const ClanView = lazy(() => import('./components/views/ClanView').then((module) => ({ default: module.ClanView })));
+const CommandsView = lazy(() => import('./components/views/CommandsView').then((module) => ({ default: module.CommandsView })));
+const SettingsView = lazy(() => import('./components/views/SettingsView').then((module) => ({ default: module.SettingsView })));
+
+const PRIMARY_NAV = [
+  { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'discovery', label: 'Server Overview', icon: Server },
   { id: 'members', label: 'Members', icon: Users },
-  { id: 'roles', label: 'Roles & Panels', icon: Sparkles },
+  { id: 'roles', label: 'Roles', icon: Sparkles },
+  { id: 'channels', label: 'Channels', icon: MessageSquare },
+  { id: 'tickets', label: 'Tickets', icon: CircleHelp },
   { id: 'moderation', label: 'Moderation', icon: Gavel },
-  { id: 'automod', label: 'AutoMod', icon: ShieldAlert },
-  { id: 'logging', label: 'Logging', icon: ScrollText },
-  { id: 'tickets', label: 'Tickets', icon: MessageSquare },
+  { id: 'automod', label: 'Automations', icon: ShieldAlert },
+  { id: 'statistics', label: 'Statistics', icon: ChartNoAxesColumnIncreasing },
+  { id: 'settings', label: 'Settings', icon: Settings },
+  { id: 'logging', label: 'Logs', icon: ScrollText },
+  { id: 'support', label: 'Support', icon: CircleHelp },
+];
+
+const GUILD_TOOLS_NAV = [
+  { id: 'languages', label: 'Languages', icon: Globe },
   { id: 'recruitment', label: 'Recruitment', icon: UserPlus },
   { id: 'community', label: 'Community', icon: Activity },
-  { id: 'clan', label: 'Clan Management', icon: Swords },
-  { id: 'commands', label: 'Commands & Tasks', icon: Terminal },
-  { id: 'settings', label: 'Settings', icon: Settings },
+  { id: 'clan', label: 'Clan', icon: Swords },
+  { id: 'commands', label: 'Commands', icon: Terminal },
 ];
+
+type ConnectionState = 'checking' | 'online' | 'offline';
+
+interface ApiHealthResponse {
+  ok: boolean;
+  databaseAdapter: string;
+  timestamp: string;
+  bot: GuildStateResponse['botStatus'];
+}
 
 interface GuildStateResponse {
   guild: GuildState;
@@ -75,7 +106,7 @@ interface GuildStateResponse {
     guildCount: number;
     lastError: string | null;
     startedAt: string | null;
-  };
+  } | null;
 }
 
 interface GuildOption {
@@ -84,13 +115,17 @@ interface GuildOption {
 }
 
 export default function App() {
+  const { locale, setLocale, t } = useLocale();
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUserSession | null>(null);
   const [guildOptions, setGuildOptions] = useState<GuildOption[]>([]);
   const [activeTab, setActiveTab] = useState('overview');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [data, setData] = useState<GuildStateResponse | null>(null);
-  const [databaseAdapter, setDatabaseAdapter] = useState('local');
+  const [health, setHealth] = useState<ApiHealthResponse | null>(null);
+  const [apiStatus, setApiStatus] = useState<ConnectionState>('checking');
+  const [now, setNow] = useState(Date.now());
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -100,23 +135,33 @@ export default function App() {
     if (!token) return;
     setLoading(true);
     setLoadError(null);
-    try {
-      const [stateRes, healthRes] = await Promise.all([
-        apiRequest<GuildStateResponse>(`/api/guild/${guildId}/state`, { token }),
-        apiRequest<{ databaseAdapter: string }>('/api/health'),
-      ]);
-      setData(stateRes);
-      setDatabaseAdapter(healthRes.databaseAdapter);
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : 'Failed to load guild state');
-    } finally {
-      setLoading(false);
+    const [stateResult, healthResult] = await Promise.allSettled([
+      apiRequest<GuildStateResponse>(`/api/guild/${guildId}/state`, { token }),
+      apiRequest<ApiHealthResponse>('/api/health'),
+    ]);
+    if (stateResult.status === 'fulfilled') {
+      setData(stateResult.value);
+    } else {
+      setLoadError(stateResult.reason instanceof Error ? stateResult.reason.message : t('Unable to load guild data'));
     }
-  }, [token, guildId]);
+    if (healthResult.status === 'fulfilled' && healthResult.value.ok) {
+      setHealth(healthResult.value);
+      setApiStatus('online');
+    } else {
+      setHealth(null);
+      setApiStatus('offline');
+    }
+    setLoading(false);
+  }, [token, guildId, t]);
 
   useEffect(() => {
     void refreshState();
   }, [refreshState]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!token) {
@@ -125,8 +170,8 @@ export default function App() {
     }
     apiRequest<{ guilds: GuildOption[] }>('/api/auth/guilds', { token })
       .then(({ guilds }) => setGuildOptions(guilds))
-      .catch((err) => setLoadError(err instanceof Error ? err.message : 'Failed to load authorized servers'));
-  }, [token]);
+      .catch((err) => setLoadError(err instanceof Error ? err.message : t('Failed to load authorized servers')));
+  }, [token, t]);
 
   if (!token || !user) {
     return (
@@ -139,145 +184,255 @@ export default function App() {
     );
   }
 
-  const activeNav = NAV_ITEMS.find((n) => n.id === activeTab) ?? NAV_ITEMS[0];
+  const allNavItems = [...PRIMARY_NAV, ...GUILD_TOOLS_NAV];
+  const activeNav = allNavItems.find((item) => item.id === activeTab) ?? PRIMARY_NAV[0];
+  const displayName = guildOptions.find((guild) => guild.guildId === guildId)?.name
+    ?? data?.guild.guildName
+    ?? (guildOptions.length === 0 ? t('Loading…') : guildOptions[0].name);
+  const botStatus = data?.botStatus ?? health?.bot ?? null;
+  const startedAtMs = botStatus?.startedAt ? Date.parse(botStatus.startedAt) : NaN;
+  const uptimeMinutes = Number.isFinite(startedAtMs) && startedAtMs <= now
+    ? Math.floor((now - startedAtMs) / 60_000)
+    : null;
+  const uptimeLabel = uptimeMinutes === null
+    ? t('Uptime unavailable')
+    : uptimeMinutes >= 1440
+      ? `${Math.floor(uptimeMinutes / 1440)}d ${Math.floor((uptimeMinutes % 1440) / 60)}h`
+      : uptimeMinutes >= 60
+        ? `${Math.floor(uptimeMinutes / 60)}h ${uptimeMinutes % 60}m`
+        : `${uptimeMinutes}m`;
+
+  const signOut = () => {
+    setToken(null);
+    setUser(null);
+    setData(null);
+    setHealth(null);
+    setApiStatus('checking');
+    setActiveTab('overview');
+  };
+
+  const renderNavigationItem = (item: (typeof PRIMARY_NAV)[number] | (typeof GUILD_TOOLS_NAV)[number]) => {
+    const Icon = item.icon;
+    const isActive = item.id === activeTab;
+    return (
+      <button
+        key={item.id}
+        type="button"
+        title={sidebarCollapsed ? t(item.label) : undefined}
+        aria-label={t(item.label)}
+        aria-current={isActive ? 'page' : undefined}
+        onClick={() => {
+          setActiveTab(item.id);
+          setMobileMenuOpen(false);
+        }}
+        className={`app-nav-item flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium ${
+          sidebarCollapsed ? 'justify-center' : ''
+        }`}
+      >
+        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+        {!sidebarCollapsed && <span className="truncate">{t(item.label)}</span>}
+      </button>
+    );
+  };
+
+  const botTone = botStatus?.connected ? 'success' : botStatus ? 'warning' : 'neutral';
+  const botLabel = botStatus?.connected
+    ? t('Connected')
+    : botStatus
+      ? t('Not connected')
+      : t('Unavailable');
 
   return (
-    <div className="min-h-screen bg-[#0B0D12] text-slate-100 flex">
-      {/* Mobile Sidebar Backdrop */}
+    <div className="app-shell flex bg-[#090812] text-slate-100">
       {mobileMenuOpen && (
-        <div
+        <button
+          type="button"
           className="fixed inset-0 z-30 bg-black/70 lg:hidden"
           onClick={() => setMobileMenuOpen(false)}
+          aria-label={t('Close navigation')}
         />
       )}
 
-      {/* Sidebar */}
       <aside
-        className={`fixed lg:static inset-y-0 left-0 z-40 w-64 shrink-0 border-r border-slate-800/90 bg-[#0F131C] flex flex-col transition-transform duration-200 ${
-          mobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-        }`}
+        className={`fixed inset-y-0 left-0 z-40 flex w-72 shrink-0 flex-col border-r border-white/[0.08] bg-[#100e1a] transition-[transform,width] duration-200 lg:static lg:translate-x-0 ${
+          sidebarCollapsed ? 'lg:w-[5.25rem]' : 'lg:w-64'
+        } ${mobileMenuOpen ? 'translate-x-0 shadow-2xl shadow-black/60' : '-translate-x-full'}`}
+        aria-label={t('Dashboard navigation')}
       >
-        <div className="h-16 px-5 border-b border-slate-800/90 flex items-center justify-between">
-          <div className="flex items-center gap-3 min-w-0">
-            <img
-              src={guildCrestUrl}
-              alt="ShadowSlayers Crest"
-              referrerPolicy="no-referrer"
-              className="w-9 h-9 rounded-md object-cover border border-amber-500/40 shrink-0"
-            />
-            <span className="font-display text-sm font-bold tracking-wide text-slate-100 truncate">
-              ShadowSlayers
-            </span>
-          </div>
+        <div className={`flex h-[4.5rem] shrink-0 items-center border-b border-white/[0.08] px-4 ${sidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
+          <img
+            src={guildCrestUrl}
+            alt=""
+            aria-hidden="true"
+            className="h-10 w-10 shrink-0 rounded-xl border border-violet-300/25 object-cover shadow-lg shadow-violet-950/30"
+          />
+          {!sidebarCollapsed && (
+            <div className="min-w-0">
+              <p className="truncate font-display text-sm font-semibold tracking-wide text-white">ShadowSlayers</p>
+              <p className="truncate text-[10px] uppercase tracking-[0.16em] text-violet-300">{t('Control center')}</p>
+            </div>
+          )}
           <button
             type="button"
             onClick={() => setMobileMenuOpen(false)}
-            className="lg:hidden p-1.5 text-slate-400 hover:text-slate-100"
-            aria-label="Close menu"
+            className="ml-auto rounded-lg p-2 text-slate-400 hover:bg-white/[0.06] hover:text-white lg:hidden"
+            aria-label={t('Close navigation')}
           >
-            <X className="w-5 h-5" />
+            <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
 
-        <nav className="flex-1 overflow-y-auto p-3 space-y-1">
-          {NAV_ITEMS.map((item) => {
-            const Icon = item.icon;
-            const isActive = item.id === activeTab;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => {
-                  setActiveTab(item.id);
-                  setMobileMenuOpen(false);
-                }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
-                  isActive
-                    ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                    : 'text-slate-400 hover:text-slate-100 hover:bg-[#171C28] border border-transparent'
-                }`}
-              >
-                <Icon className="w-4 h-4 shrink-0" />
-                <span className="truncate">{item.label}</span>
-              </button>
-            );
-          })}
+        <nav className="flex-1 space-y-1 overflow-y-auto p-3" aria-label={t('Primary navigation')}>
+          {PRIMARY_NAV.map(renderNavigationItem)}
+          <div className={`my-3 border-t border-white/[0.08] pt-3 ${sidebarCollapsed ? 'mx-2' : ''}`}>
+            {!sidebarCollapsed && (
+              <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                {t('Guild tools')}
+              </p>
+            )}
+            <div className="space-y-1">{GUILD_TOOLS_NAV.map(renderNavigationItem)}</div>
+          </div>
         </nav>
 
-        <div className="p-4 border-t border-slate-800/90 text-xs text-slate-400">
-          <p className="font-medium text-slate-200 truncate">{user.username}</p>
-          <p className="text-amber-400 mt-0.5">{user.clanRank ?? 'Discord Server Administrator'}</p>
+        <div className={`shrink-0 border-t border-white/[0.08] p-3 ${sidebarCollapsed ? 'text-center' : ''}`}>
+          <div className="flex items-center gap-2.5">
+            <span className={`app-status-dot ${botStatus?.connected ? 'text-emerald-400' : 'text-amber-300'}`} aria-hidden="true" />
+            {!sidebarCollapsed && (
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-slate-200">{t('Discord connection')}</p>
+                <p className="truncate text-[11px] text-slate-400">{botLabel}</p>
+                {botStatus?.startedAt && (
+                  <p className="mt-1 text-[10px] text-slate-500">{t('Uptime')}: {uptimeLabel}</p>
+                )}
+              </div>
+            )}
+          </div>
+          {!sidebarCollapsed && (
+            <div className="mt-3 flex items-center gap-2 border-t border-white/[0.06] pt-3">
+              {user.avatarUrl ? (
+                <img src={user.avatarUrl} alt="" className="h-8 w-8 rounded-full border border-white/10 object-cover" />
+              ) : (
+                <span className="grid h-8 w-8 place-items-center rounded-full bg-violet-400/10 text-xs font-semibold text-violet-200">
+                  {user.username.slice(0, 1).toUpperCase()}
+                </span>
+              )}
+              <div className="min-w-0">
+                <p className="truncate text-xs font-medium text-slate-200">{user.username}</p>
+                <p className="truncate text-[10px] text-slate-500">{displayName}</p>
+              </div>
+            </div>
+          )}
         </div>
       </aside>
 
-      {/* Main Workspace */}
-      <div className="flex-1 min-w-0 flex flex-col">
-        {/* Clean 3-Zone Top Bar */}
-        <header className="h-16 px-4 sm:px-6 border-b border-slate-800/90 bg-[#0F131C]/90 flex items-center justify-between gap-8">
-          <div className="flex items-center gap-3 min-w-0">
+      <div className="flex min-h-screen min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.08] bg-[#100e1a]/95 px-3 py-3 backdrop-blur-xl sm:px-5 lg:px-7">
+          <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
               onClick={() => setMobileMenuOpen(true)}
-              className="lg:hidden p-2 rounded-lg border border-slate-800 text-slate-300"
-              aria-label="Open menu"
+              className="rounded-xl border border-white/10 p-2 text-slate-300 hover:bg-white/[0.06] lg:hidden"
+              aria-label={t('Open navigation')}
             >
-              <Menu className="w-5 h-5" />
+              <Menu className="h-4 w-4" aria-hidden="true" />
             </button>
-            <span className="font-display text-base font-semibold text-slate-100 whitespace-nowrap truncate">
-              {activeNav.label}
-            </span>
-          </div>
-
-          <div className="hidden md:flex items-center gap-4 text-xs text-slate-400 whitespace-nowrap">
-            {guildOptions.length > 1 ? (
-              <label className="flex items-center gap-2">
-                <span className="sr-only">Active Discord server</span>
-                <select
-                  aria-label="Active Discord server"
-                  value={guildId}
-                  onChange={(event) => {
-                    setUser((current) => current ? { ...current, guildId: event.target.value } : current);
-                    setData(null);
-                  }}
-                  className="max-w-64 rounded-md border border-slate-700 bg-[#171C28] px-2 py-1 text-slate-200"
-                >
-                  {guildOptions.map((guild) => (
-                    <option key={guild.guildId} value={guild.guildId}>{guild.name}</option>
-                  ))}
-                </select>
-              </label>
-            ) : (
-              <span>{data?.guild.guildName || 'ShadowSlayers – Legends of Elements'}</span>
-            )}
-            <span aria-hidden="true">·</span>
-            <span className="font-mono-tabular">DB: {databaseAdapter}</span>
-          </div>
-
-          <div className="flex items-center gap-3 shrink-0">
             <button
               type="button"
-              onClick={() => {
-                setToken(null);
-                setUser(null);
-                setData(null);
-              }}
-              className="px-3.5 py-2 rounded-lg border border-slate-700 bg-[#171C28] hover:bg-[#1E2535] text-xs font-medium text-slate-200 flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+              onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+              className="hidden rounded-xl border border-white/10 p-2 text-slate-300 hover:bg-white/[0.06] lg:inline-flex"
+              aria-label={sidebarCollapsed ? t('Expand sidebar') : t('Collapse sidebar')}
+              title={sidebarCollapsed ? t('Expand sidebar') : t('Collapse sidebar')}
             >
-              <LogOut className="w-3.5 h-3.5" />
-              <span>Sign Out</span>
+              {sidebarCollapsed
+                ? <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />
+                : <PanelLeftClose className="h-4 w-4" aria-hidden="true" />}
             </button>
+            <div className="min-w-0">
+              <p className="truncate font-display text-base font-semibold text-white sm:text-lg">{t(activeNav.label)}</p>
+              <p className="hidden truncate text-xs text-slate-500 sm:block">{displayName}</p>
+            </div>
+          </div>
+
+          <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto sm:gap-3">
+            <label className="sr-only" htmlFor="active-guild">{t('Select Discord server')}</label>
+            <select
+              id="active-guild"
+              aria-label={t('Select Discord server')}
+              value={guildId}
+              disabled={guildOptions.length <= 1}
+              onChange={(event) => {
+                setUser((current) => current ? { ...current, guildId: event.target.value } : current);
+                setData(null);
+                setLoadError(null);
+              }}
+              className="app-input min-w-0 max-w-[min(48vw,15rem)] px-3 py-2 text-xs sm:max-w-56"
+            >
+              {guildOptions.length === 0 && <option value={guildId}>{displayName}</option>}
+              {guildOptions.map((guild) => (
+                <option key={guild.guildId} value={guild.guildId}>{guild.name}</option>
+              ))}
+            </select>
+
+            <StatusPill label={apiStatus === 'checking' ? t('Checking…') : apiStatus === 'online' ? t('API is responding') : t('API health check failed')} tone={apiStatus === 'online' ? 'success' : apiStatus === 'offline' ? 'danger' : 'neutral'} />
+            <StatusPill label={botLabel} tone={botTone} />
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('logging')}
+              className="relative rounded-xl border border-white/10 p-2 text-slate-300 transition hover:border-violet-300/25 hover:bg-violet-400/[0.08] hover:text-white"
+              aria-label={t('Notifications and recent activity')}
+              title={t('Notifications and recent activity')}
+            >
+              <Bell className="h-4 w-4" aria-hidden="true" />
+            </button>
+
+            <label className="sr-only" htmlFor="dashboard-language">{t('Language')}</label>
+            <select
+              id="dashboard-language"
+              value={locale}
+              onChange={(event) => setLocale(event.target.value === 'sv' ? 'sv' : 'en')}
+              className="app-input px-2.5 py-2 text-xs"
+              aria-label={t('Language')}
+            >
+              <option value="en">EN</option>
+              <option value="sv">SV</option>
+            </select>
+
+            <details className="relative">
+              <summary
+                className="flex cursor-pointer list-none items-center gap-2 rounded-xl border border-white/10 p-1.5 pr-2.5 text-sm text-slate-200 hover:bg-white/[0.06] [&::-webkit-details-marker]:hidden"
+                aria-label={t('Open profile menu')}
+              >
+                {user.avatarUrl ? (
+                  <img src={user.avatarUrl} alt="" className="h-7 w-7 rounded-full object-cover" />
+                ) : (
+                  <span className="grid h-7 w-7 place-items-center rounded-full bg-violet-400/15 text-xs font-semibold text-violet-100">
+                    {user.username.slice(0, 1).toUpperCase()}
+                  </span>
+                )}
+                <ChevronDown className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
+              </summary>
+              <div className="absolute right-0 top-full z-30 mt-2 w-56 rounded-xl border border-white/10 bg-[#151124] p-3 shadow-2xl shadow-black/50">
+                <p className="truncate text-sm font-medium text-white">{user.username}</p>
+                <p className="mt-1 truncate text-xs text-slate-400">{displayName}</p>
+                <button type="button" onClick={signOut} className="mt-3 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-200 hover:bg-red-400/10">
+                  <LogOut className="h-4 w-4" aria-hidden="true" />
+                  {t('Sign out')}
+                </button>
+              </div>
+            </details>
           </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1440px] w-full mx-auto">
+        <main className="mx-auto w-full max-w-[1600px] flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
           {loadError && (
-            <div className="mb-6 p-4 rounded-xl border border-red-500/40 bg-red-950/30 text-sm text-red-200">
+            <div className="mb-6 rounded-xl border border-red-400/25 bg-red-400/[0.07] p-4 text-sm text-red-200" role="alert">
               {loadError}
             </div>
           )}
 
           {loading && !data ? (
-            <div className="space-y-4">
+            <div className="space-y-4" aria-label={t('Loading guild data…')} aria-busy="true">
               <div className="h-44 rounded-xl bg-[#121620] border border-slate-800 animate-pulse" />
               <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                 {[1, 2, 3, 4].map((n) => (
@@ -286,17 +441,21 @@ export default function App() {
               </div>
             </div>
           ) : data ? (
+            <Suspense fallback={<div className="app-panel p-6 text-sm text-slate-400" role="status">{t('Loading dashboard…')}</div>}>
             <>
               {activeTab === 'overview' && (
                 <OverviewView
                   guild={data.guild}
                   botStatus={data.botStatus}
-                  databaseAdapter={databaseAdapter}
+                  databaseAdapter={health?.databaseAdapter ?? null}
+                  apiStatus={apiStatus}
                   onNavigate={setActiveTab}
                 />
               )}
 
-              {activeTab === 'discovery' && (
+              {activeTab === 'statistics' && <StatisticsView guild={data.guild} />}
+
+              {(activeTab === 'discovery' || activeTab === 'channels') && (
                 <ServerManagementView
                   guild={data.guild}
                   onRescan={async () => {
@@ -496,7 +655,7 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'tickets' && (
+              {(activeTab === 'tickets' || activeTab === 'support') && (
                 <TicketsView
                   guild={data.guild}
                   onCreateTicket={async (payload: {
@@ -658,7 +817,7 @@ export default function App() {
               {activeTab === 'settings' && (
                 <SettingsView
                   guild={data.guild}
-                  databaseAdapter={databaseAdapter}
+                  databaseAdapter={health?.databaseAdapter ?? t('Unavailable')}
                   onSaveSettings={async (patch: { modules?: GuildModulesConfig }) => {
                     await apiRequest(`/api/guild/${guildId}/settings`, {
                       method: 'PATCH',
@@ -680,7 +839,17 @@ export default function App() {
                 />
               )}
             </>
-          ) : null}
+            </Suspense>
+          ) : !loading && (
+            <div className="app-panel mx-auto max-w-2xl p-8 text-center" role="status">
+              <Server className="mx-auto h-8 w-8 text-violet-300" aria-hidden="true" />
+              <h2 className="mt-4 font-display text-xl font-semibold text-white">{t('No server data is available for this account.')}</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-400">{loadError ?? t('Unable to load guild data')}</p>
+              <button type="button" className="ss-button-primary mx-auto mt-5" onClick={() => void refreshState()}>
+                {t('Retry')}
+              </button>
+            </div>
+          )}
         </main>
       </div>
     </div>

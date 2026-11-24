@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Search } from 'lucide-react';
 import type { GuildState, LogCategory } from '../../../packages/shared/src/types';
+import { useLocale } from '../../lib/LocaleProvider';
 
 interface LoggingViewProps {
   guild: GuildState;
@@ -8,11 +9,13 @@ interface LoggingViewProps {
 }
 
 export const LoggingView: React.FC<LoggingViewProps> = ({ guild, onSaveLogging }) => {
+  const { locale, t } = useLocale();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<string>('all');
   const [retentionDays, setRetentionDays] = useState(guild.logging.retentionDays);
   const [enabled, setEnabled] = useState(guild.logging.enabled);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const categories = Array.from(new Set(guild.logs.map((l) => l.category)));
   const filtered = guild.logs.filter((log) => {
@@ -25,20 +28,30 @@ export const LoggingView: React.FC<LoggingViewProps> = ({ guild, onSaveLogging }
       (log.targetName || '').toLowerCase().includes(q);
     return matchCat && matchSearch;
   });
+  const savePolicy = async () => {
+    setError(null);
+    setFeedback(null);
+    try {
+      await onSaveLogging({ enabled, retentionDays });
+      setFeedback(t('Logging configuration saved.'));
+    } catch (err) {
+      setError(err instanceof Error ? t(err.message) : t('Save failed'));
+    }
+  };
 
   return (
     <div className="space-y-6">
       <div className="rounded-xl border border-slate-800 bg-[#121620] p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
-          <h2 className="font-display text-xl font-semibold text-slate-100">Centralized Audit & Event Logs</h2>
+          <h2 className="font-display text-xl font-semibold text-slate-100">{t('Centralized Audit & Event Logs')}</h2>
           <p className="text-sm text-slate-400 mt-1">
-            Searchable across moderation, AutoMod, tickets, recruitment, discovery, and dashboard mutations.
+            {t('Searchable across moderation, AutoMod, tickets, recruitment, discovery, and dashboard mutations.')}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-xs text-slate-300">
             <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-amber-500" />
-            <span>Enabled</span>
+            <span>{t('Enabled')}</span>
           </label>
           <input
             type="number"
@@ -48,20 +61,19 @@ export const LoggingView: React.FC<LoggingViewProps> = ({ guild, onSaveLogging }
             onChange={(e) => setRetentionDays(Number(e.target.value))}
             className="w-20 px-2.5 py-1.5 rounded-lg bg-[#0B0D12] border border-slate-800 text-xs font-mono-tabular"
           />
-          <span className="text-xs text-slate-400">days retention</span>
+          <span className="text-xs text-slate-400">{t('days retention')}</span>
           <button
             type="button"
-            onClick={() =>
-              onSaveLogging({ enabled, retentionDays }).then(() => setFeedback('Logging configuration saved.'))
-            }
+            onClick={() => void savePolicy()}
             className="px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold text-xs cursor-pointer"
           >
-            Save Policy
+            {t('Save Policy')}
           </button>
         </div>
       </div>
 
       {feedback && <div className="p-3 rounded-lg border border-amber-500/40 bg-amber-950/20 text-sm text-amber-200">{feedback}</div>}
+      {error && <div className="p-3 rounded-lg border border-red-500/40 bg-red-950/30 text-sm text-red-200" role="alert">{error}</div>}
 
       <div className="rounded-xl border border-slate-800 bg-[#121620] p-6 space-y-4">
         <div className="flex flex-wrap items-center gap-3">
@@ -70,7 +82,7 @@ export const LoggingView: React.FC<LoggingViewProps> = ({ guild, onSaveLogging }
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Filter by actor, target, or summary..."
+              placeholder={t('Filter by actor, target, or summary...')}
               className="w-full pl-9 pr-3 py-2 rounded-lg bg-[#0B0D12] border border-slate-800 text-sm text-slate-100"
             />
           </div>
@@ -79,9 +91,9 @@ export const LoggingView: React.FC<LoggingViewProps> = ({ guild, onSaveLogging }
             onChange={(e) => setCategory(e.target.value)}
             className="px-3 py-2 rounded-lg bg-[#0B0D12] border border-slate-800 text-sm text-slate-100"
           >
-            <option value="all">All Categories ({guild.logs.length})</option>
+            <option value="all">{t('All Categories')} ({guild.logs.length})</option>
             {categories.map((cat: LogCategory) => (
-              <option key={cat} value={cat}>{cat}</option>
+              <option key={cat} value={cat}>{t(cat)}</option>
             ))}
           </select>
         </div>
@@ -90,25 +102,28 @@ export const LoggingView: React.FC<LoggingViewProps> = ({ guild, onSaveLogging }
           <table className="w-full text-left border-collapse text-sm">
             <thead>
               <tr className="border-b border-slate-800 text-xs text-slate-400">
-                <th className="py-2 pr-3 font-medium">Timestamp</th>
-                <th className="py-2 pr-3 font-medium">Category</th>
-                <th className="py-2 pr-3 font-medium">Actor</th>
-                <th className="py-2 pr-3 font-medium">Target</th>
-                <th className="py-2 font-medium">Summary</th>
+                <th className="py-2 pr-3 font-medium">{t('Timestamp')}</th>
+                <th className="py-2 pr-3 font-medium">{t('Category')}</th>
+                <th className="py-2 pr-3 font-medium">{t('Actor')}</th>
+                <th className="py-2 pr-3 font-medium">{t('Target')}</th>
+                <th className="py-2 font-medium">{t('Summary')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/70">
               {filtered.map((log) => (
                 <tr key={log.id} className="h-10">
                   <td className="py-2 pr-3 font-mono-tabular text-xs text-slate-400 whitespace-nowrap">
-                    {new Date(log.createdAt).toLocaleString()}
+                    {new Date(log.createdAt).toLocaleString(locale === 'sv' ? 'sv-SE' : 'en-US')}
                   </td>
-                  <td className="py-2 pr-3 font-mono-tabular text-xs text-amber-400">{log.category}</td>
+                  <td className="py-2 pr-3 font-mono-tabular text-xs text-amber-400">{t(log.category)}</td>
                   <td className="py-2 pr-3 text-slate-200">{log.actorName}</td>
                   <td className="py-2 pr-3 text-xs text-slate-400">{log.targetName || '-'}</td>
                   <td className="py-2 text-xs text-slate-300">{log.summary}</td>
                 </tr>
               ))}
+              {filtered.length === 0 && (
+                <tr><td colSpan={5} className="py-8 text-center text-sm text-slate-400">{t('No matching audit entries.')}</td></tr>
+              )}
             </tbody>
           </table>
         </div>

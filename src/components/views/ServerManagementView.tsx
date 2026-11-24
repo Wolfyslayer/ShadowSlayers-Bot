@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { RefreshCw, CheckCircle2, Lock, AlertTriangle } from 'lucide-react';
 import type { GuildState, ResourceLifecycleState } from '../../../packages/shared/src/types';
+import { useLocale } from '../../lib/LocaleProvider';
 
 interface ServerManagementViewProps {
   guild: GuildState;
@@ -34,10 +35,12 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
   onRescan,
   onConfirmSetup,
 }) => {
+  const { locale, t } = useLocale();
   const [explicitConfirm, setExplicitConfirm] = useState(false);
   const [setupMode, setSetupMode] = useState<'missing_only' | 'full_setup'>('missing_only');
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const actionableChanges = guild.discovery.proposedChanges.filter(
     (c) => c.status === 'proposed' || c.status === 'missing' || c.status === 'failed' || c.status === 'confirmed',
@@ -52,11 +55,12 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
   const handleRescan = async () => {
     setBusy(true);
     setFeedback(null);
+    setError(null);
     try {
       await onRescan();
-      setFeedback('Server structure rescanned non-destructively.');
+      setFeedback(t('Server structure rescanned non-destructively.'));
     } catch (err) {
-      setFeedback(err instanceof Error ? err.message : 'Rescan failed');
+      setError(err instanceof Error ? t(err.message) : t('Rescan failed'));
     } finally {
       setBusy(false);
     }
@@ -66,24 +70,30 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
     if (!explicitConfirm) return;
     setBusy(true);
     setFeedback(null);
+    setError(null);
     try {
       const res = await onConfirmSetup(setupMode);
       setExplicitConfirm(false);
       if (res.executionMode === 'live_discord') {
         const manualNote =
           res.report?.skippedManualItems && res.report.skippedManualItems.length > 0
-            ? ` Manual-only skipped: ${res.report.skippedManualItems.join(', ')}.`
+            ? ` ${t('Manual-only skipped')}: ${res.report.skippedManualItems.join(', ')}.`
             : '';
         setFeedback(
-          `Executed additive ${setupMode} setup against live Discord guild (${res.report?.appliedCount ?? 0} applied, ${res.report?.failedCount ?? 0} failed).${manualNote}`,
+          t('Executed additive {{mode}} setup against live Discord guild ({{applied}} applied, {{failed}} failed).{{manualNote}}', {
+            mode: t(setupMode),
+            applied: res.report?.appliedCount ?? 0,
+            failed: res.report?.failedCount ?? 0,
+            manualNote,
+          }),
         );
       } else {
         setFeedback(
-          'Setup plan confirmed in database (standby mode: live Discord Gateway is not currently connected, so changes are marked "confirmed" rather than "applied").',
+          t('Setup plan confirmed in database (standby mode: live Discord Gateway is not currently connected, so changes are marked "confirmed" rather than "applied").'),
         );
       }
     } catch (err) {
-      setFeedback(err instanceof Error ? err.message : 'Confirmation failed');
+      setError(err instanceof Error ? t(err.message) : t('Confirmation failed'));
     } finally {
       setBusy(false);
     }
@@ -94,10 +104,10 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
       <div className="rounded-xl border border-slate-800 bg-[#121620] p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="font-display text-xl font-semibold text-slate-100">
-            Non-Destructive Server Discovery & Setup Audit
+            {t('Non-Destructive Server Discovery & Setup Audit')}
           </h2>
           <p className="text-sm text-slate-400 mt-1">
-            Last scanned: <span className="font-mono-tabular text-slate-300">{new Date(guild.discovery.lastDiscoveredAt).toLocaleString()}</span> · Existing roles, colors, positions, and overwrites are never deleted or overwritten. 👑 Shadow King always requires manual setup.
+            {t('Last scanned')}: <span className="font-mono-tabular text-slate-300">{new Date(guild.discovery.lastDiscoveredAt).toLocaleString(locale === 'sv' ? 'sv-SE' : 'en-US')}</span> · {t('Existing roles, colors, positions, and overwrites are never deleted or overwritten. 👑 Shadow King always requires manual setup.')}
           </p>
         </div>
         <button
@@ -107,13 +117,18 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
           className="px-4 py-2 rounded-lg border border-slate-700 bg-[#171C28] hover:bg-[#1E2535] text-sm font-medium text-slate-200 flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
         >
           <RefreshCw className="w-4 h-4" />
-          <span>Run Discovery Scan</span>
+          <span>{t('Run Discovery Scan')}</span>
         </button>
       </div>
 
       {feedback && (
-        <div className="p-3.5 rounded-lg border border-amber-500/40 bg-amber-950/20 text-amber-200 text-sm">
+        <div className="p-3.5 rounded-lg border border-amber-500/40 bg-amber-950/20 text-amber-200 text-sm" role="status">
           {feedback}
+        </div>
+      )}
+      {error && (
+        <div className="p-3.5 rounded-lg border border-red-500/40 bg-red-950/30 text-red-200 text-sm" role="alert">
+          {error}
         </div>
       )}
 
@@ -122,11 +137,16 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
           <div className="flex items-center gap-2 font-semibold text-sm">
             <AlertTriangle className="w-4 h-4 text-red-400" />
             <span>
-              Audit Findings: {conflictChanges.length} Conflict(s), {incorrectPlacements.length} Misplaced Channel(s), {incorrectTypes.length} Type Mismatch(es), {permissionDifferences.length} Permission Diff(s)
+              {t('Audit Findings: {{conflicts}} Conflict(s), {{placements}} Misplaced Channel(s), {{types}} Type Mismatch(es), {{permissions}} Permission Diff(s)', {
+                conflicts: conflictChanges.length,
+                placements: incorrectPlacements.length,
+                types: incorrectTypes.length,
+                permissions: permissionDifferences.length,
+              })}
             </span>
           </div>
           <p className="text-xs text-red-200/80">
-            Setup never guesses on ambiguous aliases, never silently moves misplaced channels, and never strips existing Discord overwrites. Review findings below before manual remediation.
+            {t('Setup never guesses on ambiguous aliases, never silently moves misplaced channels, and never strips existing Discord overwrites. Review findings below before manual remediation.')}
           </p>
         </div>
       )}
@@ -135,14 +155,19 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
       <div className="rounded-xl border border-slate-800 bg-[#121620] p-6 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
-            <h3 className="font-display text-lg font-semibold text-slate-100">Proposed Setup & Audit Operations</h3>
+            <h3 className="font-display text-lg font-semibold text-slate-100">{t('Proposed Setup & Audit Operations')}</h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              {actionableChanges.length} pending/confirmed · {manualChanges.length} manual-only · {conflictChanges.length} conflicting · {guild.discovery.proposedChanges.length - actionableChanges.length - conflictChanges.length - manualChanges.length} mapped/applied
+              {t('{{actionable}} pending/confirmed · {{manual}} manual-only · {{conflicts}} conflicting · {{mapped}} mapped/applied', {
+                actionable: actionableChanges.length,
+                manual: manualChanges.length,
+                conflicts: conflictChanges.length,
+                mapped: guild.discovery.proposedChanges.length - actionableChanges.length - conflictChanges.length - manualChanges.length,
+              })}
             </p>
           </div>
           {guild.discovery.setupConfirmedAt && (
             <span className="text-xs text-emerald-400 font-mono-tabular">
-              Confirmed by {guild.discovery.setupConfirmedBy}
+              {t('Confirmed by')} {guild.discovery.setupConfirmedBy}
             </span>
           )}
         </div>
@@ -153,15 +178,15 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
               <div>
                 <p className="text-sm font-medium text-slate-200">
                   {change.targetName}
-                  {change.parentCategoryName ? <span className="text-xs text-slate-400 ml-2">in {change.parentCategoryName}</span> : null}
+                  {change.parentCategoryName ? <span className="text-xs text-slate-400 ml-2">{t('in')} {change.parentCategoryName}</span> : null}
                 </p>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  {change.kind} · {change.reason}
+                  {t(change.kind)} · {t(change.reason)}
                   {change.error ? <span className="text-red-400 ml-1">({change.error})</span> : null}
                 </p>
               </div>
               <span className={`text-xs font-mono-tabular shrink-0 ${STATE_COLOR[change.status] ?? 'text-slate-400'}`}>
-                {change.status}
+                {t(change.status)}
                 {change.verifiedDiscordId ? ` (${change.verifiedDiscordId})` : ''}
               </span>
             </div>
@@ -176,8 +201,8 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
                 onChange={(e) => setSetupMode(e.target.value as 'missing_only' | 'full_setup')}
                 className="px-3 py-2 rounded-lg bg-[#0B0D12] border border-slate-800 text-xs text-slate-200"
               >
-                <option value="missing_only">Mode: Missing Required Only</option>
-                <option value="full_setup">Mode: Full Additive Template</option>
+                <option value="missing_only">{t('Mode: Missing Required Only')}</option>
+                <option value="full_setup">{t('Mode: Full Additive Template')}</option>
               </select>
               <label className="flex items-center gap-2.5 text-sm text-slate-300 cursor-pointer">
                 <input
@@ -186,7 +211,7 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
                   onChange={(e) => setExplicitConfirm(e.target.checked)}
                   className="w-4 h-4 accent-amber-500 rounded"
                 />
-                <span>I confirm these additive, non-destructive setup actions only (no roles deleted/renamed; 👑 Shadow King stays manual).</span>
+                <span>{t('I confirm these additive, non-destructive setup actions only (no roles deleted/renamed; 👑 Shadow King stays manual).')}</span>
               </label>
             </div>
             <button
@@ -196,7 +221,7 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
               className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-slate-950 font-semibold text-sm flex items-center gap-2 cursor-pointer whitespace-nowrap"
             >
               <CheckCircle2 className="w-4 h-4" />
-              <span>Confirm Additive Setup</span>
+              <span>{t('Confirm Additive Setup')}</span>
             </button>
           </div>
         )}
@@ -207,17 +232,17 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="rounded-xl border border-slate-800 bg-[#121620] p-5 space-y-2">
             <h3 className="font-display text-base font-semibold text-slate-100">
-              Misplaced Channels ({incorrectPlacements.length})
+              {t('Misplaced Channels')} ({incorrectPlacements.length})
             </h3>
             {incorrectPlacements.length === 0 ? (
-              <p className="text-xs text-slate-400">All discovered legacy channels reside in their expected category.</p>
+              <p className="text-xs text-slate-400">{t('All discovered legacy channels reside in their expected category.')}</p>
             ) : (
               <div className="space-y-2 text-xs">
                 {incorrectPlacements.map((p) => (
                   <div key={p.discordChannelId} className="p-2.5 rounded-lg bg-[#0B0D12] border border-slate-800">
                     <p className="font-mono-tabular text-amber-300">#{p.channelName}</p>
                     <p className="text-slate-400 mt-0.5">
-                      Actual: {p.actualCategoryName ?? 'Uncategorized'} → Expected: {p.expectedCategoryName}
+                      {t('Actual')}: {p.actualCategoryName ?? t('Uncategorized')} → {t('Expected')}: {p.expectedCategoryName}
                     </p>
                   </div>
                 ))}
@@ -227,17 +252,17 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
 
           <div className="rounded-xl border border-slate-800 bg-[#121620] p-5 space-y-2">
             <h3 className="font-display text-base font-semibold text-slate-100">
-              Channel Type Mismatches ({incorrectTypes.length})
+              {t('Channel Type Mismatches')} ({incorrectTypes.length})
             </h3>
             {incorrectTypes.length === 0 ? (
-              <p className="text-xs text-slate-400">No text/voice/announcement type mismatches found.</p>
+              <p className="text-xs text-slate-400">{t('No text/voice/announcement type mismatches found.')}</p>
             ) : (
               <div className="space-y-2 text-xs">
-                {incorrectTypes.map((t) => (
-                  <div key={t.discordChannelId} className="p-2.5 rounded-lg bg-[#0B0D12] border border-slate-800">
-                    <p className="font-mono-tabular text-amber-300">#{t.channelName}</p>
+                {incorrectTypes.map((typeDiff) => (
+                  <div key={typeDiff.discordChannelId} className="p-2.5 rounded-lg bg-[#0B0D12] border border-slate-800">
+                    <p className="font-mono-tabular text-amber-300">#{typeDiff.channelName}</p>
                     <p className="text-slate-400 mt-0.5">
-                      Actual: {t.actualType} → Expected: {t.expectedType}
+                      {t('Actual')}: {t(typeDiff.actualType)} → {t('Expected')}: {t(typeDiff.expectedType)}
                     </p>
                   </div>
                 ))}
@@ -247,10 +272,10 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
 
           <div className="rounded-xl border border-slate-800 bg-[#121620] p-5 space-y-2">
             <h3 className="font-display text-base font-semibold text-slate-100">
-              Permission Audit Diffs ({permissionDifferences.length})
+              {t('Permission Audit Diffs')} ({permissionDifferences.length})
             </h3>
             {permissionDifferences.length === 0 ? (
-              <p className="text-xs text-slate-400">No permission boundary drifts detected.</p>
+              <p className="text-xs text-slate-400">{t('No permission boundary drifts detected.')}</p>
             ) : (
               <div className="space-y-2 text-xs max-h-60 overflow-y-auto">
                 {permissionDifferences.map((f) => (
@@ -269,7 +294,7 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="rounded-xl border border-slate-800 bg-[#121620] p-6">
           <h3 className="font-display text-lg font-semibold text-slate-100 mb-4">
-            Legacy Categories & Channels ({guild.discovery.categories.length} categories · {guild.discovery.categories.reduce((sum, c) => sum + c.channels.length, 0)} channels)
+            {t('Legacy Categories & Channels ({{categories}} categories · {{channels}} channels)', { categories: guild.discovery.categories.length, channels: guild.discovery.categories.reduce((sum, c) => sum + c.channels.length, 0) })}
           </h3>
           <div className="space-y-4">
             {guild.discovery.categories.map((cat) => (
@@ -279,18 +304,18 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
                     <span className="text-sm font-semibold text-slate-100 truncate">{cat.name}</span>
                     {cat.isPrivateLeadership && (
                       <span className="inline-flex items-center gap-1 text-xs text-amber-400 shrink-0">
-                        <Lock className="w-3 h-3" /> Leadership
+                        <Lock className="w-3 h-3" /> {t('Leadership')}
                       </span>
                     )}
                   </div>
                   <span className={`font-mono-tabular text-xs shrink-0 ${STATE_COLOR[cat.lifecycleState] ?? 'text-slate-400'}`}>
-                    {cat.lifecycleState} · {cat.channels.length} ch
+                    {t(cat.lifecycleState)} · {cat.channels.length} {t('ch')}
                   </span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
                   {cat.channels.map((ch) => (
                     <span key={ch.id} className="font-mono-tabular">
-                      {ch.type === 'voice' ? '🔊 ' : '#'}{ch.name}{ch.readOnlyForMembers ? ' (RO)' : ''}
+                      {ch.type === 'voice' ? '🔊 ' : '#'}{ch.name}{ch.readOnlyForMembers ? ` (${t('RO')})` : ''}
                     </span>
                   ))}
                 </div>
@@ -300,7 +325,7 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
             {optionalChannels.length > 0 && (
               <div className="pt-2 border-t border-slate-800">
                 <p className="text-xs font-semibold text-sky-300 mb-1">
-                  Optional Non-Legacy Extension Channels ({optionalChannels.length})
+                  {t('Optional Non-Legacy Extension Channels')} ({optionalChannels.length})
                 </p>
                 <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400 font-mono-tabular">
                   {optionalChannels.map((ch) => (
@@ -313,7 +338,7 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
             {guild.discovery.uncategorizedChannels && guild.discovery.uncategorizedChannels.length > 0 && (
               <div className="pt-2 border-t border-slate-800">
                 <p className="text-xs font-semibold text-slate-300 mb-1">
-                  Uncategorized Channels ({guild.discovery.uncategorizedChannels.length})
+                  {t('Uncategorized Channels')} ({guild.discovery.uncategorizedChannels.length})
                 </p>
                 <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400 font-mono-tabular">
                   {guild.discovery.uncategorizedChannels.map((ch) => (
@@ -328,16 +353,16 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
         {/* Discovered Roles */}
         <div className="rounded-xl border border-slate-800 bg-[#121620] p-6">
           <h3 className="font-display text-lg font-semibold text-slate-100 mb-4">
-            Legacy Role Hierarchy ({guild.discovery.roles.length})
+            {t('Legacy Role Hierarchy')} ({guild.discovery.roles.length})
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="border-b border-slate-800 text-xs text-slate-400">
-                  <th className="py-2 pr-3 font-medium">Role Name</th>
-                  <th className="py-2 pr-3 font-medium">Group</th>
-                  <th className="py-2 pr-3 font-medium text-right">Color</th>
-                  <th className="py-2 font-medium text-right">Lifecycle</th>
+                  <th className="py-2 pr-3 font-medium">{t('Role Name')}</th>
+                  <th className="py-2 pr-3 font-medium">{t('Group')}</th>
+                  <th className="py-2 pr-3 font-medium text-right">{t('Color')}</th>
+                  <th className="py-2 font-medium text-right">{t('Lifecycle')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/70">
@@ -346,15 +371,15 @@ export const ServerManagementView: React.FC<ServerManagementViewProps> = ({
                     <td className="py-2 pr-3 text-slate-200 font-medium">
                       {role.name}
                       {role.excludeFromAutoSetup ? (
-                        <span className="ml-2 text-[11px] text-purple-300">(Manual Only)</span>
+                        <span className="ml-2 text-[11px] text-purple-300">{t('(Manual Only)')}</span>
                       ) : null}
                     </td>
-                    <td className="py-2 pr-3 text-xs text-slate-400">{role.category}</td>
+                    <td className="py-2 pr-3 text-xs text-slate-400">{t(role.category)}</td>
                     <td className="py-2 pr-3 font-mono-tabular text-xs text-slate-400 text-right">
-                      {role.colorHex ?? 'unverified'}
+                      {role.colorHex ?? t('unverified')}
                     </td>
                     <td className={`py-2 text-xs text-right font-mono-tabular ${STATE_COLOR[role.lifecycleState] ?? 'text-slate-400'}`}>
-                      {role.lifecycleState}
+                      {t(role.lifecycleState)}
                     </td>
                   </tr>
                 ))}

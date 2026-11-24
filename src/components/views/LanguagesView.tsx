@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Globe, Plus, Check, Eye } from 'lucide-react';
 import type { GuildState, LanguageConfig } from '../../../packages/shared/src/types';
 import { BASE_TRANSLATION_KEYS, previewLanguageChannels, type CompletenessReport } from '../../../packages/localization/src/engine';
+import { useLocale } from '../../lib/LocaleProvider';
 
 interface LanguagesViewProps {
   guild: GuildState;
@@ -35,6 +36,7 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
   onCreateChannels,
   onToggleLanguage,
 }) => {
+  const { locale, t } = useLocale();
   const [selectedCode, setSelectedCode] = useState<string>(guild.languages[0]?.code || 'en');
   const [showAddForm, setShowAddForm] = useState(false);
   const [newCode, setNewCode] = useState('sv');
@@ -89,9 +91,9 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
       });
       setSelectedCode(newCode.toLowerCase());
       setShowAddForm(false);
-      setFeedback(`Draft language "${newName}" created from template. Enter translations manually below.`);
+      setFeedback(t('Draft language "{{name}}" created from template. Enter translations manually below.', { name: newName }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create language');
+      setError(err instanceof Error ? t(err.message) : t('Failed to create language'));
     }
   };
 
@@ -106,9 +108,9 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
         rulesSummary: rulesMsg,
         announcementBanner: bannerMsg,
       });
-      setFeedback(`Saved manual translations for ${selectedLang.name}.`);
+      setFeedback(t('Saved manual translations for {{name}}.', { name: selectedLang.name }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Save failed');
+      setError(err instanceof Error ? t(err.message) : t('Save failed'));
     }
   };
 
@@ -118,9 +120,9 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
     setFeedback(null);
     try {
       await onReviewLanguage(selectedLang.code, 'approved', reviewNotes);
-      setFeedback(`${selectedLang.name} marked approved and ready for channel publication.`);
+      setFeedback(t('{{name}} marked approved and ready for channel publication.', { name: selectedLang.name }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Approval blocked');
+      setError(err instanceof Error ? t(err.message) : t('Approval blocked'));
     }
   };
 
@@ -131,9 +133,9 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
     try {
       await onCreateChannels(selectedLang.code);
       setConfirmCreateChannels(false);
-      setFeedback(`Created ${selectedLang.name} category & channels and enabled language role.`);
+      setFeedback(t('Created {{name}} category & channels and enabled language role.', { name: selectedLang.name }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Channel creation failed');
+      setError(err instanceof Error ? t(err.message) : t('Channel creation failed'));
     }
   };
 
@@ -142,10 +144,10 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
       <div className="rounded-xl border border-slate-800 bg-[#121620] p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="font-display text-xl font-semibold text-slate-100">
-            Dynamic Multilingual System
+            {t('Dynamic Multilingual System')}
           </h2>
           <p className="text-sm text-slate-400 mt-1">
-            Template-driven manual localization with versioned review, channel structure previews, and non-destructive deactivation. Zero AI translation.
+            {t('Template-driven manual localization with versioned review, channel structure previews, and non-destructive deactivation. Zero AI translation.')}
           </p>
         </div>
         <button
@@ -154,27 +156,27 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
           className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold text-sm flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
         >
           <Plus className="w-4 h-4" />
-          <span>Add Language</span>
+          <span>{t('Add Language')}</span>
         </button>
       </div>
 
       {error && (
-        <div className="p-3.5 rounded-lg border border-red-500/40 bg-red-950/30 text-red-200 text-sm">
+        <div className="p-3.5 rounded-lg border border-red-500/40 bg-red-950/30 text-red-200 text-sm" role="alert">
           {error}
         </div>
       )}
       {feedback && (
-        <div className="p-3.5 rounded-lg border border-amber-500/40 bg-amber-950/20 text-amber-200 text-sm">
+        <div className="p-3.5 rounded-lg border border-amber-500/40 bg-amber-950/20 text-amber-200 text-sm" role="status">
           {feedback}
         </div>
       )}
 
       {showAddForm && (
         <form onSubmit={handleAddLanguage} className="rounded-xl border border-slate-800 bg-[#121620] p-6 space-y-4">
-          <h3 className="font-display text-lg font-semibold text-slate-100">Create New Language Realm</h3>
+          <h3 className="font-display text-lg font-semibold text-slate-100">{t('Create New Language Realm')}</h3>
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <div>
-              <label className="block text-xs text-slate-400 mb-1">ISO Code</label>
+              <label className="block text-xs text-slate-400 mb-1">{t('ISO Code')}</label>
               <input
                 value={newCode}
                 onChange={(e) => setNewCode(e.target.value)}
@@ -184,7 +186,7 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
               />
             </div>
             <div>
-              <label className="block text-xs text-slate-400 mb-1">English Name</label>
+              <label className="block text-xs text-slate-400 mb-1">{t('English Name')}</label>
               <input
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
@@ -194,7 +196,7 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
               />
             </div>
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Native Name</label>
+              <label className="block text-xs text-slate-400 mb-1">{t('Native Name')}</label>
               <input
                 value={newNative}
                 onChange={(e) => setNewNative(e.target.value)}
@@ -204,7 +206,7 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
               />
             </div>
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Flag Emoji</label>
+              <label className="block text-xs text-slate-400 mb-1">{t('Flag Emoji')}</label>
               <input
                 value={newFlag}
                 onChange={(e) => setNewFlag(e.target.value)}
@@ -220,13 +222,13 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
               onClick={() => setShowAddForm(false)}
               className="px-4 py-2 rounded-lg border border-slate-700 text-sm text-slate-300 cursor-pointer"
             >
-              Cancel
+              {t('Cancel')}
             </button>
             <button
               type="submit"
               className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold text-sm cursor-pointer"
             >
-              Generate Template Draft
+              {t('Generate Template Draft')}
             </button>
           </div>
         </form>
@@ -253,15 +255,15 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
                   {lang.flagEmoji} {lang.name}
                 </span>
                 <span className={`text-xs font-mono-tabular ${lang.enabled ? 'text-emerald-400' : 'text-slate-400'}`}>
-                  {lang.enabled ? 'Enabled' : 'Disabled'}
+                  {lang.enabled ? t('Enabled') : t('Disabled')}
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-1">
-                {lang.nativeName} · v{lang.version} · {lang.review.status}
+                {lang.nativeName} · v{lang.version} · {t(lang.review.status)}
               </p>
               <div className="mt-3">
                 <div className="flex justify-between text-xs font-mono-tabular text-slate-400 mb-1">
-                  <span>Completeness</span>
+                  <span>{t('Completeness')}</span>
                   <span>{rep?.completenessPercent ?? 0}%</span>
                 </div>
                 <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden">
@@ -283,10 +285,10 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="font-display text-lg font-semibold text-slate-100">
-                  {selectedLang.flagEmoji} {selectedLang.name} Translation Editor
+                  {selectedLang.flagEmoji} {selectedLang.name} {t('Translation Editor')}
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Missing keys: {report?.missingKeys.length ?? 0} · Review status: {selectedLang.review.status}
+                  {t('Missing keys')}: {report?.missingKeys.length ?? 0} · {t('Review status')}: {t(selectedLang.review.status)}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -295,15 +297,15 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
                   onClick={() => setShowMissingOnly((v) => !v)}
                   className="px-3 py-1.5 rounded-lg border border-slate-700 bg-[#171C28] text-xs text-slate-200 cursor-pointer"
                 >
-                  {showMissingOnly ? 'Show All Keys' : 'Missing Keys Only'}
+                  {showMissingOnly ? t('Show All Keys') : t('Missing Keys Only')}
                 </button>
                 {!selectedLang.isDefault && (
                   <button
                     type="button"
-                    onClick={() => onToggleLanguage(selectedLang.code).catch((err) => setError(err.message))}
+                    onClick={() => onToggleLanguage(selectedLang.code).catch((err) => setError(err instanceof Error ? t(err.message) : t('Update failed')))}
                     className="px-3 py-1.5 rounded-lg border border-slate-700 bg-[#171C28] text-xs text-slate-200 cursor-pointer"
                   >
-                    {selectedLang.enabled ? 'Disable (Keep Channels)' : 'Enable Language'}
+                    {selectedLang.enabled ? t('Disable (Keep Channels)') : t('Enable Language')}
                   </button>
                 )}
               </div>
@@ -311,31 +313,31 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
 
             <div className="grid grid-cols-1 gap-4 pt-2 border-t border-slate-800">
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Localized Welcome Message</label>
+                <label className="block text-xs font-medium text-slate-300 mb-1">{t('Localized Welcome Message')}</label>
                 <textarea
                   rows={2}
                   value={welcomeMsg}
                   onChange={(e) => setWelcomeMsg(e.target.value)}
-                  placeholder="Enter localized welcome message..."
+                  placeholder={t('Enter localized welcome message...')}
                   className="w-full px-3 py-2 rounded-lg bg-[#0B0D12] border border-slate-800 text-sm text-slate-100"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Localized Rules Summary</label>
+                <label className="block text-xs font-medium text-slate-300 mb-1">{t('Localized Rules Summary')}</label>
                 <textarea
                   rows={2}
                   value={rulesMsg}
                   onChange={(e) => setRulesMsg(e.target.value)}
-                  placeholder="Enter localized rules summary..."
+                  placeholder={t('Enter localized rules summary...')}
                   className="w-full px-3 py-2 rounded-lg bg-[#0B0D12] border border-slate-800 text-sm text-slate-100"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Announcement Banner</label>
+                <label className="block text-xs font-medium text-slate-300 mb-1">{t('Announcement Banner')}</label>
                 <input
                   value={bannerMsg}
                   onChange={(e) => setBannerMsg(e.target.value)}
-                  placeholder="Enter localized announcement..."
+                  placeholder={t('Enter localized announcement...')}
                   className="w-full px-3 py-2 rounded-lg bg-[#0B0D12] border border-slate-800 text-sm text-slate-100"
                 />
               </div>
@@ -349,14 +351,14 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-mono-tabular text-xs text-slate-300">{key}</span>
                       <span className={`text-xs ${isMissing ? 'text-amber-400' : 'text-emerald-400'}`}>
-                        {isMissing ? 'Missing' : 'Translated'}
+                        {isMissing ? t('Missing') : t('Translated')}
                       </span>
                     </div>
-                    <p className="text-xs text-slate-500">EN ref: {BASE_TRANSLATION_KEYS[key]}</p>
+                    <p className="text-xs text-slate-500">{t('EN ref')}: {BASE_TRANSLATION_KEYS[key]}</p>
                     <input
                       value={draftEntries[key] ?? ''}
                       onChange={(e) => setDraftEntries((prev) => ({ ...prev, [key]: e.target.value }))}
-                      placeholder={`Enter ${selectedLang.name} translation...`}
+                      placeholder={t('Enter {{name}} translation...', { name: selectedLang.name })}
                       className="w-full px-3 py-2 rounded-lg bg-[#0B0D12] border border-slate-800 text-sm text-slate-100 focus:border-amber-500 focus:outline-none"
                     />
                   </div>
@@ -370,13 +372,13 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
                 onClick={handleSave}
                 className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold text-sm cursor-pointer"
               >
-                Save Manual Translations
+                {t('Save Manual Translations')}
               </button>
               <div className="flex items-center gap-2">
                 <input
                   value={reviewNotes}
                   onChange={(e) => setReviewNotes(e.target.value)}
-                  placeholder="Review notes"
+                  placeholder={t('Review notes')}
                   className="px-3 py-2 rounded-lg bg-[#0B0D12] border border-slate-800 text-xs text-slate-200"
                 />
                 <button
@@ -385,7 +387,7 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
                   className="px-3.5 py-2 rounded-lg border border-emerald-500/40 bg-emerald-950/30 hover:bg-emerald-950/50 text-emerald-300 text-sm font-medium flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
                 >
                   <Check className="w-4 h-4" />
-                  <span>Approve Bundle</span>
+                  <span>{t('Approve Bundle')}</span>
                 </button>
               </div>
             </div>
@@ -395,22 +397,22 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
           <div className="lg:col-span-4 rounded-xl border border-slate-800 bg-[#121620] p-6 space-y-5">
             <div className="flex items-center gap-2">
               <Eye className="w-4 h-4 text-amber-400" />
-              <h3 className="font-display text-lg font-semibold text-slate-100">Channel Structure Preview</h3>
+              <h3 className="font-display text-lg font-semibold text-slate-100">{t('Channel Structure Preview')}</h3>
             </div>
             {channelPreview && (
               <div className="space-y-3">
                 <div className="p-3 rounded-lg bg-[#0B0D12] border border-slate-800">
-                  <p className="text-xs text-slate-400">Target Discord Category</p>
+                  <p className="text-xs text-slate-400">{t('Target Discord Category')}</p>
                   <p className="text-sm font-semibold text-slate-100 mt-0.5">{channelPreview.categoryName}</p>
                   <p className="text-xs text-slate-400 mt-2">
-                    Independent Role: <span className="text-slate-200">{channelPreview.roleName}</span>
+                    {t('Independent Role')}: <span className="text-slate-200">{channelPreview.roleName}</span>
                   </p>
                 </div>
                 <div className="divide-y divide-slate-800/70">
                   {channelPreview.channels.map((ch) => (
                     <div key={ch.key} className="py-2 flex items-center justify-between text-xs">
                       <span className="font-mono-tabular text-slate-200">{ch.name}</span>
-                      <span className="text-slate-400">{ch.readOnly ? 'Read-Only' : 'Chat'}</span>
+                      <span className="text-slate-400">{ch.readOnly ? t('Read-Only') : t('Chat')}</span>
                     </div>
                   ))}
                 </div>
@@ -421,7 +423,7 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
               {selectedLang.channelsCreated ? (
                 <div className="p-3 rounded-lg border border-emerald-500/30 bg-emerald-950/20 text-xs text-emerald-300">
                   <Globe className="w-4 h-4 inline mr-1.5" />
-                  Channels created & linked ({selectedLang.createdChannels.length}). Disabling this language will preserve all channels and history.
+                  {t('Channels created & linked ({{count}}). Disabling this language will preserve all channels and history.', { count: selectedLang.createdChannels.length })}
                 </div>
               ) : (
                 <>
@@ -432,7 +434,7 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
                       onChange={(e) => setConfirmCreateChannels(e.target.checked)}
                       className="mt-0.5 accent-amber-500"
                     />
-                    <span>I have reviewed the translations and explicitly confirm creating these Discord channels.</span>
+                    <span>{t('I have reviewed the translations and explicitly confirm creating these Discord channels.')}</span>
                   </label>
                   <button
                     type="button"
@@ -440,11 +442,11 @@ export const LanguagesView: React.FC<LanguagesViewProps> = ({
                     disabled={!confirmCreateChannels || !report?.readyForPublication}
                     className="w-full py-2 px-4 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-slate-950 font-semibold text-sm cursor-pointer"
                   >
-                    Create Approved Channels & Publish
+                    {t('Create Approved Channels & Publish')}
                   </button>
                   {!report?.readyForPublication && (
                     <p className="text-xs text-slate-400">
-                      Requires 100% translated keys, welcome/rules text, and Approved status before creation.
+                      {t('Requires 100% translated keys, welcome/rules text, and Approved status before creation.')}
                     </p>
                   )}
                 </>

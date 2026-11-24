@@ -2,16 +2,76 @@
 
 @layer base {
   :root {
+    color-scheme: dark;
+    --ss-bg: #090812;
+    --ss-bg-raised: #100e1a;
+    --ss-surface: #151124;
+    --ss-surface-raised: #1c1830;
+    --ss-surface-hover: #241d39;
+    --ss-accent: #8b35f5;
+    --ss-accent-bright: #a56af7;
+    --ss-accent-soft: rgba(139, 53, 245, 0.16);
+    --ss-silver: #c5c2d6;
+    --ss-muted: #9c98ad;
+    --ss-border: rgba(197, 194, 214, 0.14);
+    --ss-success: #34d399;
+    --ss-warning: #fbbf24;
+    --ss-error: #f87171;
     --font-display: 'Cinzel', Georgia, serif;
     --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
   }
 
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    background: var(--ss-bg);
+    scroll-behavior: smooth;
+  }
+
   body {
     font-family: var(--font-sans);
-    background-color: #0b0d12;
-    color: #e2e8f0;
+    background:
+      radial-gradient(ellipse at 70% -20%, rgba(139, 53, 245, 0.12), transparent 42%),
+      var(--ss-bg);
+    color: #f1eff8;
+    min-height: 100vh;
+    margin: 0;
   }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  button,
+  a,
+  select,
+  input,
+  textarea,
+  summary {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ss-accent-bright);
+    outline-offset: 3px;
+  }
+
+  ::selection {
+    color: #fff;
+    background: rgba(139, 53, 245, 0.55);
+  }
+}
+
+#root {
+  min-height: 100vh;
 }
 
 .font-display {
@@ -25,4 +85,236 @@
 
 .tabular-nums {
   font-variant-numeric: tabular-nums;
+}
+
+/* Preserve existing component markup while applying the shared dashboard palette. */
+:where([class~="bg-[#0B0D12]"], [class~="bg-[#0b0d12]"]) {
+  background-color: var(--ss-bg) !important;
+}
+
+:where([class~="bg-[#0F131C]"], [class~="bg-[#0f131c]"], [class~="bg-[#0E1119]"], [class~="bg-[#0e1119]"]) {
+  background-color: var(--ss-bg-raised) !important;
+}
+
+:where([class~="bg-[#121620]"], [class~="bg-[#121620]/90"]) {
+  background-color: var(--ss-surface) !important;
+}
+
+:where(
+  [class~="bg-[#171C28]"],
+  [class~="bg-[#171c28]"],
+  [class~="bg-[#192030]"],
+  [class~="bg-[#161B26]"],
+  [class~="bg-[#161b26]"]
+) {
+  background-color: var(--ss-surface-raised) !important;
+}
+
+:where([class~="hover:bg-[#1E2535]"]):hover,
+:where([class~="hover:bg-[#1e2535]"]):hover,
+:where([class~="hover:bg-[#161B26]"]):hover,
+:where([class~="hover:bg-[#161b26]"]):hover {
+  background-color: var(--ss-surface-hover) !important;
+}
+
+:where([class*="border-slate-800"], [class*="border-slate-700"]) {
+  border-color: var(--ss-border) !important;
+}
+
+:where(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  color: #f1eff8;
+  border-color: var(--ss-border);
+}
+
+:where(input:not([type="checkbox"]):not([type="radio"]), select, textarea)::placeholder {
+  color: #858095;
+}
+
+:where(input:not([type="checkbox"]):not([type="radio"]), select, textarea):focus {
+  border-color: var(--ss-accent-bright);
+  outline: 2px solid rgba(139, 53, 245, 0.22);
+  outline-offset: 1px;
+}
+
+:where(table) {
+  min-width: 100%;
+}
+
+:where(th, td) {
+  vertical-align: middle;
+}
+
+:where(button:disabled) {
+  cursor: not-allowed !important;
+}
+
+:where(.app-shell) :where(button.bg-amber-600) {
+  color: #fff !important;
+  background: linear-gradient(135deg, #8b35f5, #7025d3) !important;
+  box-shadow: 0 8px 24px rgba(139, 53, 245, 0.2);
+}
+
+:where(.app-shell) :where(button.bg-amber-600:hover) {
+  background: linear-gradient(135deg, #9e59f7, #8138e0) !important;
+  box-shadow: 0 10px 28px rgba(139, 53, 245, 0.28);
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.app-panel {
+  border: 1px solid var(--ss-border);
+  border-radius: 1rem;
+  background: linear-gradient(145deg, rgba(28, 24, 48, 0.96), rgba(21, 17, 36, 0.96));
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.2);
+}
+
+.app-input {
+  border: 1px solid var(--ss-border);
+  border-radius: 0.65rem;
+  background: rgba(9, 8, 18, 0.72);
+  color: #f1eff8;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.app-input:focus {
+  border-color: var(--ss-accent);
+  box-shadow: 0 0 0 3px rgba(139, 53, 245, 0.16);
+  outline: none;
+}
+
+.app-nav-item {
+  border: 1px solid transparent;
+  color: #aaa6ba;
+  transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+.app-nav-item:hover {
+  color: #f1eff8;
+  background: rgba(197, 194, 214, 0.06);
+}
+
+.app-nav-item[aria-current="page"] {
+  color: #f4eaff;
+  border-color: rgba(165, 106, 247, 0.3);
+  background: linear-gradient(100deg, rgba(139, 53, 245, 0.2), rgba(139, 53, 245, 0.06));
+  box-shadow: inset 3px 0 0 var(--ss-accent), 0 0 24px rgba(139, 53, 245, 0.1);
+}
+
+.app-status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: none;
+  border-radius: 9999px;
+  background: currentColor;
+  box-shadow: 0 0 10px currentColor;
+}
+
+.ss-button-primary,
+.ss-button-secondary,
+.ss-button-quiet {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  border-radius: 0.75rem;
+  padding: 0.65rem 1rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, color 160ms ease;
+}
+
+.ss-button-primary {
+  border: 1px solid rgba(187, 145, 255, 0.28);
+  color: #fff;
+  background: linear-gradient(135deg, #8b35f5, #7025d3);
+  box-shadow: 0 8px 26px rgba(139, 53, 245, 0.2);
+}
+
+.ss-button-primary:hover {
+  background: linear-gradient(135deg, #9d5af7, #8138e0);
+  box-shadow: 0 10px 32px rgba(139, 53, 245, 0.28);
+}
+
+.app-button-danger,
+.app-button-danger:hover {
+  border-color: rgba(248, 113, 113, 0.35);
+  color: #fff;
+  background: #991b1b !important;
+  box-shadow: 0 8px 24px rgba(248, 113, 113, 0.16);
+}
+
+.app-button-danger:hover {
+  background: #b91c1c !important;
+}
+
+.ss-button-secondary {
+  border: 1px solid var(--ss-border);
+  color: var(--ss-silver);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.ss-button-secondary:hover {
+  border-color: rgba(165, 106, 247, 0.32);
+  color: #fff;
+  background: rgba(139, 53, 245, 0.09);
+}
+
+.ss-button-quiet {
+  min-height: 2.25rem;
+  border: 1px solid transparent;
+  color: #c5b2e8;
+  background: transparent;
+  padding: 0.4rem 0.55rem;
+}
+
+.ss-button-quiet:hover {
+  color: #fff;
+  background: rgba(139, 53, 245, 0.1);
+}
+
+.app-shell details[open] > summary {
+  border-color: rgba(165, 106, 247, 0.3);
+}
+
+.app-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
+.app-confirm-dialog {
+  width: min(32rem, calc(100vw - 2rem));
+  max-width: none;
+  padding: 0;
+  border: 0;
+  overflow: visible;
+  background: transparent;
+  color: inherit;
+}
+
+.app-confirm-dialog::backdrop {
+  background: rgba(3, 2, 8, 0.78);
+  backdrop-filter: blur(5px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .ss-button-primary,
+  .ss-button-secondary {
+    width: 100%;
+  }
 }
