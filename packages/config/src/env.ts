@@ -4,8 +4,8 @@ dotenv.config();
 
 export interface FirebaseAdminConfig {
   projectId: string;
-  clientEmail: string;
-  privateKey: string;
+  clientEmail?: string;
+  privateKey?: string;
 }
 
 export type DiscordCommandScope = 'auto' | 'guild' | 'global';
@@ -53,8 +53,18 @@ export function loadEnv(): RuntimeEnv {
   const projectId = (process.env.FIREBASE_PROJECT_ID || '').trim();
   const clientEmail = (process.env.FIREBASE_CLIENT_EMAIL || '').trim();
   const privateKey = (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
-  const firebase: FirebaseAdminConfig | null =
-    projectId && clientEmail && privateKey ? { projectId, clientEmail, privateKey } : null;
+  const hasServiceAccountFields = Boolean(clientEmail || privateKey);
+  if (hasServiceAccountFields && (!projectId || !clientEmail || !privateKey)) {
+    throw new Error(
+      'FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY must be configured together.',
+    );
+  }
+  const firebase: FirebaseAdminConfig | null = projectId
+    ? {
+        projectId,
+        ...(hasServiceAccountFields ? { clientEmail, privateKey } : {}),
+      }
+    : null;
 
   return {
     port,

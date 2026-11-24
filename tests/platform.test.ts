@@ -872,6 +872,60 @@ test('Persistent scheduler executes due tasks idempotently without double runs',
   fs.rmSync(tmpFile, { force: true });
 });
 
+test('Persistent scheduler prunes expired local audit logs during its maintenance tick', async () => {
+  const tmpFile = path.join(os.tmpdir(), `shadowslayers-retention-test-${Date.now()}.json`);
+  const db = new LocalPersistentAdapter(tmpFile, 'shadowslayers-retention');
+  await db.init();
+
+  const guild = await db.getGuild('shadowslayers-retention');
+  assert.ok(guild);
+  guild.logs.push({
+    ...guild.logs[0],
+    id: 'expired-retention-test',
+    createdAt: new Date(Date.now() - 100 * 86400_000).toISOString(),
+  });
+  await db.saveGuild(guild);
+
+  const scheduler = new PersistentTaskScheduler(db);
+  await scheduler.tick();
+
+  const afterCleanup = await db.getGuild(guild.guildId);
+  assert.ok(afterCleanup);
+  assert.equal(afterCleanup.logs.some((log) => log.id === 'expired-retention-test'), false);
+
+  afterCleanup.logs.push({
+    ...afterCleanup.logs[0],
+    id: 'expired-forced-retention-test',
+    createdAt: new Date(Date.now() - 100 * 86400_000).toISOString(),
+  });
+  const pastIso = new Date(Date.now() - 60_000).toISOString();
+  afterCleanup.scheduledTasks.push({
+    id: 'task-test-log-cleanup',
+    guildId: afterCleanup.guildId,
+    type: 'log_cleanup',
+    targetId: 'guild',
+    description: 'Due log cleanup test',
+    runAt: pastIso,
+    status: 'pending',
+    attempts: 0,
+    lastError: null,
+    completedAt: null,
+    createdAt: pastIso,
+  });
+  await db.saveGuild(afterCleanup);
+  assert.equal(await scheduler.tick(), 1);
+
+  const afterForcedCleanup = await db.getGuild(guild.guildId);
+  assert.ok(afterForcedCleanup);
+  assert.equal(
+    afterForcedCleanup.logs.some((log) => log.id === 'expired-forced-retention-test'),
+    false,
+  );
+
+  await db.close();
+  fs.rmSync(tmpFile, { force: true });
+});
+
 test('Slash command parity, Discord.js schema options, subcommand extraction, and offline false-success prevention', async () => {
   const names = new Set(SLASH_COMMANDS.map((c) => c.name));
   for (const required of [

@@ -11,6 +11,7 @@ import type {
 import type { BotControlCommand, BotRuntimeSnapshot } from '../../shared/src/bot-control.ts';
 import { CURRENT_SCHEMA_VERSION, createInitialGuildSeed } from './seed.ts';
 import { migrateDatabaseRoot } from '../../../database/schema-migrations.ts';
+import { anonymizeGuildUserData } from '../../shared/src/guild-privacy.ts';
 import { FirestoreDatabaseAdapter } from './firestore-adapter.ts';
 
 export interface DatabaseAdapter {
@@ -22,6 +23,8 @@ export interface DatabaseAdapter {
   getGuild(guildId: string): Promise<GuildState | null>;
   saveGuild(guild: GuildState): Promise<void>;
   appendAuditLog(guildId: string, entry: AuditLogEntry): Promise<void>;
+  anonymizeGuildUserData(guildId: string, userId: string): Promise<void>;
+  pruneExpiredAuditLogs(nowIso: string): Promise<number>;
   getPendingTasks(nowIso: string): Promise<ScheduledTask[]>;
   updateTaskStatus(guildId: string, taskId: string, patch: Partial<ScheduledTask>): Promise<void>;
   enqueueBotCommand(command: BotControlCommand): Promise<void>;
@@ -150,6 +153,43 @@ export class LocalPersistentAdapter implements DatabaseAdapter {
     await this.flush();
   }
 
+  async anonymizeGuildUserData(guildId: string, userId: string): Promise<void> {
+    const guild = this.state.guilds[guildId];
+    if (!guild) throw new Error(`[Database] Cannot anonymize user data: guild "${guildId}" does not exist.`);
+    this.state.guilds[guildId] = {
+      ...anonymizeGuildUserData(guild, userId),
+      updatedAt: new Date().toISOString(),
+    };
+    await this.flush();
+  }
+
+  async pruneExpiredAuditLogs(nowIso: string): Promise<number> {
+    const nowMs = Date.parse(nowIso);
+    if (!Number.isFinite(nowMs)) {
+      throw new Error(`[Database] Cannot prune audit logs: invalid reference time "${nowIso}".`);
+    }
+
+    let removed = 0;
+    for (const guild of Object.values(this.state.guilds)) {
+      const retentionDays = guild.logging?.retentionDays;
+      if (typeof retentionDays !== 'number' || !Number.isFinite(retentionDays) || retentionDays < 0) {
+        throw new Error(`[Database] Cannot prune audit logs: invalid retentionDays for guild "${guild.guildId}".`);
+      }
+
+      const cutoffMs = nowMs - retentionDays * 86400_000;
+      const keptLogs = guild.logs.filter((log) => Date.parse(log.createdAt) >= cutoffMs);
+      const removedFromGuild = guild.logs.length - keptLogs.length;
+      if (removedFromGuild === 0) continue;
+
+      guild.logs = keptLogs;
+      guild.updatedAt = new Date(nowMs).toISOString();
+      removed += removedFromGuild;
+    }
+
+    if (removed > 0) await this.flush();
+    return removed;
+  }
+
   async getPendingTasks(nowIso: string): Promise<ScheduledTask[]> {
     const nowMs = new Date(nowIso).getTime();
     const due: ScheduledTask[] = [];
@@ -229,12 +269,12 @@ export function createDatabaseAdapter(
       if (nodeEnv === 'production') {
         throw new Error(
           `[Database] Production startup aborted: DATABASE_ADAPTER="firestore" was selected, ` +
-            `but FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY are not configured. ` +
+            `but FIREBASE_PROJECT_ID is not configured. ` +
             `Silent fallback to local JSON storage is forbidden in production.`,
         );
       }
       throw new Error(
-        `[Database] DATABASE_ADAPTER="firestore" requires FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY. ` +
+        `[Database] DATABASE_ADAPTER="firestore" requires FIREBASE_PROJECT_ID and either service-account credentials or platform Application Default Credentials. ` +
           `Set DATABASE_ADAPTER=local for explicit local development mode.`,
       );
     }

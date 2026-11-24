@@ -9,6 +9,46 @@
 
 The API is a necessary security boundary for the dashboard; GitHub Pages cannot call Firebase Admin or Discord privileged APIs directly. It validates each user's Discord permissions, signs authorized bot commands, and writes them to Firestore. The Lunafy bot polls and executes commands only for guilds in its Gateway session; no inbound Lunafy port is used. Live Discord/Firebase end-to-end testing is still required before production use.
 
+### Does the API run on Firebase?
+
+Not as currently implemented. Firebase provides Firestore for shared data; `server.ts` is a regular Express/Node.js API, not a Firebase Cloud Function. The trusted API is deployed separately on Google Cloud Run in the existing Firebase project.
+
+At launch, the components fit together like this:
+
+1. Keep the bot running as a persistent Node.js process on Lunafy. It connects to Discord and polls Firestore for authorized work.
+2. Keep the trusted API on Cloud Run. Its HTTPS origin, server-side secrets, and Firestore runtime identity are configured there.
+3. Keep the dashboard static on GitHub Pages and use the repository variable `VITE_API_BASE_URL` to point to the API's HTTPS origin.
+4. Add the published Pages origin to the API's `ALLOWED_ORIGINS`, and register the API's `/auth/callback` URL as the Discord OAuth redirect.
+5. Give the API and bot the same Firebase project and server-only `BOT_CONTROL_SECRET`. Do not put either service's secrets in dashboard variables.
+
+### Current Cloud Run deployment
+
+- Project: `shadowslayers-7f48f`
+- Service and region: `shadowslayers-api` in `europe-west4`
+- API origin: `https://shadowslayers-api-vloo4dmzfa-ez.a.run.app`
+- Health endpoint: `GET /api/health` returned healthy with the Firestore adapter; dashboard-origin CORS preflight returned `204`.
+- GitHub Actions variable `VITE_API_BASE_URL` is set to the API origin. The existing website's own dashboard build must use the same public value.
+- Cloud Run runs as `shadowslayers-api@shadowslayers-7f48f.iam.gserviceaccount.com`, with Firestore access and access only to the API's required Secret Manager secrets. It uses Application Default Credentials; no Firebase service-account key is mounted in the container.
+- Cloud Run is limited to one instance because OAuth state and rate-limit windows are currently held in process memory.
+- API CORS currently allows the website origin `https://wolfyslayer.online`; the dashboard URL path does not belong in `ALLOWED_ORIGINS`.
+- The GitHub Pages workflow exists, but Pages is not enabled. The planned website route `https://wolfyslayer.online/shadow-slayers/dashboard` returned `404` when checked, so the dashboard itself is not confirmed live there.
+- Register `https://shadowslayers-api-vloo4dmzfa-ez.a.run.app/auth/callback` as an OAuth2 redirect URI in the Discord Developer Portal before testing sign-in. The API can generate the correct Discord authorization URL, but the full Discord callback flow has not been verified.
+
+The Cloud Run image is built from `Dockerfile`. `.gcloudignore` excludes local environment files, the local `.data` database, dashboard files, tests, and generated outputs. Express is a production dependency. The API uses the Cloud Run service identity for Firestore rather than a downloaded service-account key.
+
+### Changing API secrets
+
+Use Google Cloud Console → Secret Manager to add a new version of the appropriate secret, then deploy a new Cloud Run revision so new instances receive it. Do not put secret values in the dashboard, website source, GitHub Actions variables, or chat.
+
+| Secret Manager name | Used for | Rotation notes |
+| --- | --- | --- |
+| `discord-bot-token` | API's live Discord membership and permission checks | Update the bot host's `DISCORD_BOT_TOKEN` as well if the token is rotated. |
+| `discord-client-secret` | Discord OAuth2 | Register the API callback URL in Discord Developer Portal; the client ID is a non-secret Cloud Run setting. |
+| `session-secret` | Signing dashboard sessions and deletion tokens | Changing it invalidates existing sessions and outstanding deletion tokens. |
+| `bot-control-secret` | Signing API-to-bot commands | The API and Lunafy bot must use the exact same value. Rotate both sides together. |
+
+The Cloud Run service currently references each secret's `latest` version. After adding a version, deploy a new revision or update the secret reference to a specific version so the running service reloads it. `APP_URL`, `ALLOWED_ORIGINS`, `FIREBASE_PROJECT_ID`, and `DISCORD_CLIENT_ID` are configuration values, not secret values.
+
 ## Windows local development (PowerShell)
 
 ```powershell
@@ -88,33 +128,29 @@ npm run start:bot
 
 Configure `npm run start:bot` as the persistent process command. It validates configuration, initializes Firestore, starts the scheduler and Discord Gateway, registers slash commands, and handles SIGINT/SIGTERM. It does not open a port. The target's exact packaging/upload workflow has not been verified against Lunafy; no workspaces are assumed.
 
-## Separate trusted API service
+## Trusted API runtime configuration
 
-Do not host the API on Lunafy. Use a separate persistent Node.js 22 service with the repository package files:
+Do not host the API on Lunafy. Cloud Run supplies `PORT`; configure the deployed service with:
 
-```sh
-npm ci
-npm run build:api
-npm run start:api
-```
+`NODE_ENV=production`, `APP_URL` (the HTTPS API origin only), `ALLOWED_ORIGINS` (the exact dashboard origin), `DATABASE_ADAPTER=firestore`, and `FIREBASE_PROJECT_ID`. `DISCORD_CLIENT_ID` is a non-secret setting. `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_SECRET`, `BOT_CONTROL_SECRET`, and `SESSION_SECRET` are mounted from Secret Manager. The API's session and bot-control secrets were generated for this deployment; configure the same `BOT_CONTROL_SECRET` on Lunafy before bot-control operations are expected to work. Do not copy secret values into the dashboard or source repository.
 
-Configure `NODE_ENV=production`, `PORT`, `APP_URL` (HTTPS API origin only), `ALLOWED_ORIGINS` (include the exact dashboard origin), `SESSION_SECRET` (32+ characters), `DATABASE_ADAPTER=firestore`, Firebase Admin credentials, `BOT_CONTROL_SECRET`, Discord OAuth client ID/secret, and the bot token for guild membership/permission verification. The bot token, OAuth client secret, Firebase Admin credentials, and control secret must remain server-side. The API never starts a Gateway; live operations are sent to the bot through the shared Firestore queue.
+The Cloud Run runtime identity uses platform Application Default Credentials for Firestore. Other hosts may continue using the existing server-side service-account credential fields. The API never starts a Gateway; live operations are sent to the bot through the shared Firestore queue.
 
 ## GitHub Pages
 
 1. Enable GitHub Pages with GitHub Actions as the source.
-2. Set repository **variable** `VITE_API_BASE_URL` to the public HTTPS origin of the separate trusted API (origin only, no credentials or query string). It is configuration, not a secret.
+2. The repository **variable** `VITE_API_BASE_URL` is set to the public HTTPS API origin (origin only, no credentials or query string). It is configuration, not a secret.
 3. The workflow supplies `VITE_BASE_PATH` from the repository name, executes `npm run build:dashboard`, and uploads `dist/`. No bot or Firebase credential is needed.
 4. Configure the API's `ALLOWED_ORIGINS` for the published Pages origin. OAuth2 redirect URLs must target the trusted API's `/auth/callback`.
 
-If `VITE_API_BASE_URL` is unset, the static build still succeeds, but authentication/data requests cannot reach an API. Pages deployment never builds or restarts the bot.
+The Pages workflow has not yet been enabled in repository settings. The intended dashboard host is the existing website, not GitHub Pages. Build the dashboard for the website's route with `VITE_API_BASE_URL` set to the public API origin and `VITE_BASE_PATH=/shadow-slayers/dashboard/`; upload the resulting `dist/` contents to that route. The API CORS setting uses only `https://wolfyslayer.online`, without the route path. If `VITE_API_BASE_URL` is unset, the static build still succeeds, but authentication/data requests cannot reach an API. Static dashboard deployment never builds or restarts the bot.
 
 ## Firebase setup
 
 1. Create or select a Firebase project and enable a Firestore Native database.
 2. Keep browser access denied. The dashboard has no Firebase client SDK authentication or direct Firestore operation; Admin SDK requests bypass Firestore Security Rules.
-3. Create a server-side service identity with the minimum required Firestore IAM permissions.
-4. Configure the three `FIREBASE_*` Admin values and the exact same `BOT_CONTROL_SECRET` in Lunafy and the trusted API host only. Never commit a service-account JSON file or place an Admin credential/control secret in a `VITE_` variable.
+3. Create a server-side service identity with the minimum required Firestore IAM permissions. The Cloud Run API identity already has `roles/datastore.user` for this project and uses Application Default Credentials.
+4. Configure the bot's server-side Firebase credentials and the exact same `BOT_CONTROL_SECRET` in Lunafy and the trusted API only. The API's `BOT_CONTROL_SECRET` is held in Secret Manager; never commit a service-account JSON file or place an Admin credential/control secret in a `VITE_` variable.
 5. Firestore Admin SDK requests bypass Firestore Security Rules. Preserve the API's authentication, guild-ID validation, capability checks, command signatures, and audit writes; Firestore rules do not replace these controls.
 
 ## CI

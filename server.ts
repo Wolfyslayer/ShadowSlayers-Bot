@@ -19,6 +19,10 @@ import {
   qualifiesAsDiscordGuildManager,
   type DiscordOAuthGuildAccess,
 } from './packages/permissions/src/discord-guild-access.ts';
+import {
+  signPrivacyDeletionToken,
+  verifyPrivacyDeletionToken,
+} from './packages/permissions/src/privacy-deletion-token.ts';
 import type {
   AuthUserSession,
   AuthorizedDiscordGuild,
@@ -37,6 +41,8 @@ import {
   verifyBotControlResult,
 } from './packages/shared/src/bot-control-signature.ts';
 import { normalizeGameLabels } from './packages/shared/src/game-config.ts';
+import { createGuildBackupExport } from './packages/shared/src/guild-backup.ts';
+import { SlidingWindowRateLimiter } from './packages/shared/src/sliding-window-rate-limiter.ts';
 import {
   appealReviewSchema,
   automodUpdateSchema,
@@ -68,10 +74,15 @@ interface AuthenticatedRequest extends Request {
   sessionUser?: AuthUserSession;
 }
 
+interface OAuthState {
+  createdAt: number;
+  targetOrigin: string;
+  flow: 'dashboard' | 'privacy-deletion';
+}
+
 const env = loadEnv();
 const SESSION_KEY = env.sessionSecret || crypto.randomBytes(32).toString('hex');
-const oauthStates = new Map<string, { createdAt: number; targetOrigin: string }>();
-const rateLimitBuckets = new Map<string, number[]>();
+const oauthStates = new Map<string, OAuthState>();
 const discordAccessCache = new Map<string, { expiresAt: number; access: DiscordOAuthGuildAccess | null }>();
 
 function signSessionToken(payload: AuthUserSession): string {
@@ -101,16 +112,19 @@ function verifySessionToken(token: string): AuthUserSession | null {
 }
 
 function rateLimit(maxRequests: number, windowMs: number) {
+  const limiter = new SlidingWindowRateLimiter(maxRequests, windowMs);
   return (req: Request, res: Response, next: NextFunction) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    const now = Date.now();
-    const list = (rateLimitBuckets.get(ip) ?? []).filter((t) => now - t < windowMs);
-    if (list.length >= maxRequests) {
+    const result = limiter.consume(ip);
+    if (!result.allowed) {
+      res.setHeader('Retry-After', String(result.retryAfterSeconds));
+      if (result.reason === 'capacity') {
+        res.status(503).json({ error: 'Rate limiter is temporarily at capacity. Please retry shortly.' });
+        return;
+      }
       res.status(429).json({ error: 'Rate limit exceeded. Please wait briefly before retrying.' });
       return;
     }
-    list.push(now);
-    rateLimitBuckets.set(ip, list);
     next();
   };
 }
@@ -376,7 +390,6 @@ async function bootstrap() {
   const automodEngine = new RuleBasedAutoModEngine();
   const app = express();
   app.set('trust proxy', 1);
-  app.use(express.json({ limit: '1mb' }));
 
   app.param('guildId', (_req, res, next, guildId) => {
     const parsed = safeIdSchema.safeParse(guildId);
@@ -386,6 +399,10 @@ async function bootstrap() {
     }
     next();
   });
+
+  const authRateLimit = rateLimit(30, 60_000);
+  const oauthCallbackRateLimit = rateLimit(10, 60_000);
+  const mutationRateLimit = rateLimit(60, 60_000);
 
   // Explicit origin-checked CORS (never wildcard * or overly broad domain suffixes)
   app.use((req, res, next) => {
@@ -403,6 +420,17 @@ async function bootstrap() {
     }
     next();
   });
+
+  app.use('/api/auth', authRateLimit);
+  app.use('/auth/callback', oauthCallbackRateLimit);
+  app.use('/api/guild', (req, res, next) => {
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+      mutationRateLimit(req, res, next);
+      return;
+    }
+    next();
+  });
+  app.use(express.json({ limit: '1mb' }));
 
   const requireAuth = (capability?: PermissionCapability) => {
     return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
@@ -511,11 +539,37 @@ async function bootstrap() {
       return;
     }
     const state = crypto.randomBytes(24).toString('hex');
-    oauthStates.set(state, { createdAt: Date.now(), targetOrigin });
+    oauthStates.set(state, { createdAt: Date.now(), targetOrigin, flow: 'dashboard' });
     const redirectUri = `${env.appUrl}/auth/callback`;
     const params = new URLSearchParams({
       client_id: env.discordClientId,
       redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: 'identify guilds',
+      state,
+    });
+    res.json({ url: `https://discord.com/oauth2/authorize?${params.toString()}` });
+  });
+
+  const privacyRateLimit = rateLimit(5, 60_000);
+  app.use('/api/privacy/deletion', privacyRateLimit);
+
+  app.get('/api/privacy/deletion/oauth-url', (req, res) => {
+    if (!env.discordClientId || !env.discordClientSecret) {
+      res.status(503).json({ error: 'Discord OAuth2 is not configured.' });
+      return;
+    }
+    const targetOrigin = req.headers.origin?.replace(/\/+$/, '');
+    if (!targetOrigin || !env.allowedOrigins.includes(targetOrigin)) {
+      res.status(403).json({ error: 'Discord OAuth2 must be started from a configured dashboard origin.' });
+      return;
+    }
+
+    const state = crypto.randomBytes(24).toString('hex');
+    oauthStates.set(state, { createdAt: Date.now(), targetOrigin, flow: 'privacy-deletion' });
+    const params = new URLSearchParams({
+      client_id: env.discordClientId,
+      redirect_uri: `${env.appUrl}/auth/callback`,
       response_type: 'code',
       scope: 'identify guilds',
       state,
@@ -529,12 +583,105 @@ async function bootstrap() {
 
     const stateEntry = state ? oauthStates.get(state) : undefined;
     const stateExpired = !stateEntry || Date.now() - stateEntry.createdAt > 5 * 60_000;
+    if (!code && state && !stateExpired && stateEntry?.flow === 'privacy-deletion') {
+      oauthStates.delete(state);
+      const targetOrigin = JSON.stringify(stateEntry.targetOrigin);
+      res.status(400).send(`<!doctype html><html><body>
+        <script>
+          if (window.opener) {
+            window.opener.postMessage({ type: 'OAUTH_AUTH_ERROR', error: 'Discord authorization was cancelled.' }, ${targetOrigin});
+            window.close();
+          }
+        </script>
+        <p>Discord authorization was cancelled.</p>
+      </body></html>`);
+      return;
+    }
     if (!code || !state || stateExpired) {
       if (state) oauthStates.delete(state);
       res.status(400).send('Invalid or expired OAuth state.');
       return;
     }
     oauthStates.delete(state);
+
+    if (stateEntry.flow === 'privacy-deletion') {
+      const targetOrigin = JSON.stringify(stateEntry.targetOrigin);
+      const sendPopupError = (reason: string, status = 502) => {
+        const safeReason = JSON.stringify(reason).replace(/</g, '\\u003c');
+        res.status(status).send(`<!doctype html><html><body>
+          <script>
+            if (window.opener) {
+              window.opener.postMessage({ type: 'OAUTH_AUTH_ERROR', error: ${safeReason} }, ${targetOrigin});
+              window.close();
+            }
+          </script>
+          <p>${escapeHtml(reason)}</p>
+        </body></html>`);
+      };
+
+      try {
+        const tokenResp = await fetch('https://discord.com/api/oauth2/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: env.discordClientId ?? '',
+            client_secret: env.discordClientSecret ?? '',
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: `${env.appUrl}/auth/callback`,
+          }),
+        });
+        if (!tokenResp.ok) {
+          sendPopupError('Discord authorization could not be completed.');
+          return;
+        }
+        const tokenJson = (await tokenResp.json()) as { access_token: string };
+        const [userResp, guildsResp] = await Promise.all([
+          fetch('https://discord.com/api/users/@me', {
+            headers: { Authorization: `Bearer ${tokenJson.access_token}` },
+          }),
+          fetch('https://discord.com/api/users/@me/guilds', {
+            headers: { Authorization: `Bearer ${tokenJson.access_token}` },
+          }),
+        ]);
+        if (!userResp.ok || !guildsResp.ok) {
+          sendPopupError('Discord identity or server list could not be verified.');
+          return;
+        }
+        const discordUser = (await userResp.json()) as { id: string };
+        if (!/^\d{15,22}$/.test(discordUser.id)) {
+          sendPopupError('Discord returned an invalid account identifier.');
+          return;
+        }
+        const userGuilds = (await guildsResp.json()) as Array<{ id: string; name: string }>;
+        const storedGuildIds = new Set(await db.listGuildIds());
+        const guilds = userGuilds
+          .filter((guild) => /^\d{15,22}$/.test(guild.id) && storedGuildIds.has(guild.id))
+          .map(({ id, name }) => ({ guildId: id, name }));
+        const result = {
+          type: 'OAUTH_PRIVACY_DELETE_SUCCESS',
+          token: signPrivacyDeletionToken(discordUser.id, SESSION_KEY),
+          guilds,
+        };
+        const resultJson = JSON.stringify(result)
+          .replace(/</g, '\\u003c')
+          .replace(/>/g, '\\u003e')
+          .replace(/&/g, '\\u0026');
+        res.send(`<!doctype html><html><body>
+          <script>
+            if (window.opener) {
+              window.opener.postMessage(${resultJson}, ${targetOrigin});
+              window.close();
+            }
+          </script>
+          <p>Discord identity verified. Closing window...</p>
+        </body></html>`);
+      } catch (err) {
+        console.error('[ShadowSlayers] Privacy deletion OAuth callback failed:', err);
+        sendPopupError('Discord sign-in for data deletion failed. Please retry.');
+      }
+      return;
+    }
 
     if (!env.discordClientId || !env.discordClientSecret) {
       res.status(500).send('Discord OAuth2 credentials missing on server.');
@@ -674,6 +821,38 @@ async function bootstrap() {
       }),
     );
     res.json({ guilds: guilds.filter((guild) => guild !== null) });
+  });
+
+  app.delete('/api/privacy/deletion/guild/:guildId/self', async (req, res) => {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+    const session = token ? verifyPrivacyDeletionToken(token, SESSION_KEY) : null;
+    if (!session) {
+      res.status(401).json({ error: 'A valid, recent Discord identity verification is required.' });
+      return;
+    }
+
+    const guildIdParse = safeIdSchema.safeParse(req.params.guildId);
+    if (!guildIdParse.success) {
+      res.status(400).json({ error: 'Invalid guildId.' });
+      return;
+    }
+    if (req.body?.confirm !== true) {
+      res.status(400).json({ error: 'Explicit confirmation is required.' });
+      return;
+    }
+
+    try {
+      if (!(await db.getGuild(guildIdParse.data))) {
+        res.status(404).json({ error: 'Server data not found.' });
+        return;
+      }
+      await db.anonymizeGuildUserData(guildIdParse.data, session.userId);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('[ShadowSlayers] Personal-data deletion failed:', err);
+      res.status(500).json({ error: 'Your data could not be removed. Please retry or contact support.' });
+    }
   });
 
   // Guild State
@@ -2408,17 +2587,48 @@ async function bootstrap() {
   });
 
   // Backup Export
-  app.get('/api/guild/:guildId/backup', requireAuth('settings.manage'), async (_req, res) => {
-    const snapshot = await db.exportSnapshot();
-    res.json({
-      exportedAt: new Date().toISOString(),
-      schemaVersion: snapshot.schemaVersion,
-      guilds: snapshot.guilds,
-    });
+  app.get(
+    '/api/guild/:guildId/backup',
+    rateLimit(10, 60_000),
+    requireAuth('settings.manage'),
+    async (req, res) => {
+      const backup = await createGuildBackupExport(req.params.guildId, (guildId) => db.getGuild(guildId));
+      if (!backup) {
+        res.status(404).json({ error: 'Guild not found' });
+        return;
+      }
+      res.json(backup);
+    },
+  );
+
+  const server = app.listen(env.port, '0.0.0.0', () => {
+    console.log(`[ShadowSlayers] Trusted API listening on http://0.0.0.0:${env.port} (adapter=${db.driverName})`);
   });
 
-  app.listen(env.port, '0.0.0.0', () => {
-    console.log(`[ShadowSlayers] Trusted API listening on http://0.0.0.0:${env.port} (adapter=${db.driverName})`);
+  let shuttingDown = false;
+  const shutdown = async (signal: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.info(`[ShadowSlayers] ${signal} received; closing API resources.`);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    } finally {
+      await db.close?.();
+    }
+  };
+  process.once('SIGINT', () => {
+    void shutdown('SIGINT').catch((err) => {
+      console.error('[ShadowSlayers] API shutdown failed:', err);
+      process.exitCode = 1;
+    });
+  });
+  process.once('SIGTERM', () => {
+    void shutdown('SIGTERM').catch((err) => {
+      console.error('[ShadowSlayers] API shutdown failed:', err);
+      process.exitCode = 1;
+    });
   });
 }
 

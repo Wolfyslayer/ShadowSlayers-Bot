@@ -7,6 +7,7 @@ import type { ScheduledTask } from '../../../../packages/shared/src/types.ts';
  * never double-execute tempbans, temporary roles, giveaways, reminders, or announcements.
  */
 export class PersistentTaskScheduler {
+  private nextLogCleanupAt = 0;
   private readonly inFlight = new Set<string>();
   private timer: NodeJS.Timeout | null = null;
   private activeTick: Promise<number> | null = null;
@@ -85,7 +86,25 @@ export class PersistentTaskScheduler {
       }
     }
 
+    try {
+      await this.pruneExpiredAuditLogs(nowIso);
+    } catch (err) {
+      this.onError(err);
+    }
+
     return executed;
+  }
+
+  private async pruneExpiredAuditLogs(nowIso: string, force = false): Promise<void> {
+    const nowMs = Date.parse(nowIso);
+    if (!Number.isFinite(nowMs)) {
+      throw new Error(`[Scheduler] Cannot prune audit logs: invalid reference time "${nowIso}".`);
+    }
+    if (!force && nowMs < this.nextLogCleanupAt) return;
+
+    this.nextLogCleanupAt = nowMs + 60_000;
+    await this.db.pruneExpiredAuditLogs(new Date(nowMs).toISOString());
+    this.nextLogCleanupAt = nowMs + 86400_000;
   }
 
   private async executeTask(task: ScheduledTask): Promise<void> {
@@ -127,6 +146,7 @@ export class PersistentTaskScheduler {
     } else if (task.type === 'log_cleanup') {
       const cutoff = Date.now() - guild.logging.retentionDays * 86400_000;
       guild.logs = guild.logs.filter((l) => new Date(l.createdAt).getTime() >= cutoff);
+      await this.pruneExpiredAuditLogs(now, true);
     }
 
     if (this.onDispatch) {

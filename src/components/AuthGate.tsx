@@ -12,9 +12,10 @@ interface AuthStatus {
 
 interface AuthGateProps {
   onAuthenticated: (token: string, user: AuthUserSession) => void;
+  onPrivacyRequest: () => void;
 }
 
-export const AuthGate: React.FC<AuthGateProps> = ({ onAuthenticated }) => {
+export const AuthGate: React.FC<AuthGateProps> = ({ onAuthenticated, onPrivacyRequest }) => {
   const { t } = useLocale();
   const [status, setStatus] = useState<AuthStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,23 +97,23 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onAuthenticated }) => {
               <h1 className="font-display text-xl font-bold tracking-wide text-white">
                 ShadowSlayers
               </h1>
-              <p className="text-xs text-violet-200">{t('Independent Discord Community Management')}</p>
+              <p className="text-xs text-violet-200">{t('Discord Server Management Bot')}</p>
             </div>
           </div>
 
           <div className="relative z-10 mt-12 space-y-3">
             <h2 className="font-display text-balance text-2xl font-semibold leading-snug text-white">
-              {t('Centralized Guild & Discord Governance')}
+              {t('One bot for your Discord community')}
             </h2>
             <p className="text-sm leading-relaxed text-slate-300">
-              {t('Non-destructive server discovery, dynamic multilingual realm management, deterministic AutoMod, moderation cases, tickets, and clan raid operations.')}
+              {t('Manage onboarding, roles, moderation, AutoMod, tickets, and community tools. Add game-specific ranks and classes only when your server needs them.')}
             </p>
             <div className="flex flex-wrap gap-x-3 gap-y-1 pt-2 text-xs text-slate-400">
-              <span>{t('Zero AI Dependencies')}</span>
+              <span>{t('Multi-server support')}</span>
               <span aria-hidden="true">·</span>
-              <span>{t('Server-Verified Sessions')}</span>
+              <span>{t('Discord permission checks')}</span>
               <span aria-hidden="true">·</span>
-              <span>{t('RBAC Hierarchy')}</span>
+              <span>{t('Moderation & community tools')}</span>
             </div>
           </div>
         </div>
@@ -121,11 +122,11 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onAuthenticated }) => {
           <div className="mb-7">
             <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-violet-300/20 bg-violet-400/[0.08] px-3 py-1.5 text-xs font-medium text-violet-100">
               <Shield className="h-4 w-4 text-violet-300" />
-              <span>{t('Inner Sanctum Authentication')}</span>
+              <span>{t('Secure Discord Sign-In')}</span>
             </div>
-            <h3 className="font-display text-2xl font-semibold text-white">{t('Sign In to Dashboard')}</h3>
+            <h3 className="font-display text-2xl font-semibold text-white">{t('Sign in to ShadowSlayers Bot')}</h3>
             <p className="mt-2 text-sm leading-relaxed text-slate-400">
-              {t('Sign in with Discord to access servers where you are the owner or have Administrator or Manage Server permissions.')}
+              {t('Use Discord to continue. You can manage servers you own or where you have Administrator or Manage Server permission.')}
             </p>
           </div>
 
@@ -151,6 +152,13 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onAuthenticated }) => {
             </button>
           )}
           <p className="mt-4 text-center text-xs text-slate-500">{t('Your Discord permissions are verified before server access is granted.')}</p>
+          <button
+            type="button"
+            onClick={onPrivacyRequest}
+            className="mt-6 w-full rounded-lg border border-white/10 px-4 py-2.5 text-sm text-slate-300 transition hover:border-violet-300/25 hover:bg-violet-400/[0.06] hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300"
+          >
+            {t('Delete my ShadowSlayers data')}
+          </button>
         </div>
       </div>
     </div>

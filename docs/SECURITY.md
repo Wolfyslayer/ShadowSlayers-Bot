@@ -25,7 +25,10 @@ Clan rank hierarchy (`👑 Shadow King` > `🛡️ Shadow Council` > `⚔️ War
 
 ## 4. Rate Limiting, Validation & AutoMod Safety
 - All API endpoints validate request bodies with Zod (`packages/shared/src/validation.ts`).
-- Per-IP sliding-window rate limiter guards `/api/auth/*` and mutation routes.
+- Per-IP sliding-window limits: `/api/auth/*` 30 requests/minute, OAuth callback 10/minute, guild mutation routes 60/minute, privacy deletion endpoints 5/minute, and guild backup export 10/minute. Responses include `Retry-After`; the in-memory limiter state is capped per process and is not shared across instances or restarts.
+- Express trusts one proxy hop for client IP resolution. Deployments with multiple API instances must add a shared rate limiter or edge protection if a global per-IP limit is required.
+- Audit logs are pruned on bot startup and daily according to each guild's configured retention period. Firestore log documents are deleted from the per-guild `logs` subcollection; cleanup errors are reported and retried.
+- Self-service data deletion uses Discord OAuth identity verification and a purpose-specific HMAC token with a ten-minute lifetime. The token can call only the self-deletion route; guild-admin permissions are not required. Firestore deletion anonymizes matching audit and bot-control records and refuses to proceed while a related bot command is processing.
 - AutoMod uses deterministic rules (never AI) and forbids automated permanent bans on uncertain triggers.
 
 ## 5. Security & Authorization Hardening (Phase 0.3 Audit)

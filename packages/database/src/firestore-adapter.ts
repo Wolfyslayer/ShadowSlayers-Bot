@@ -1,4 +1,4 @@
-import { cert, deleteApp, getApps, initializeApp, type App } from 'firebase-admin/app';
+import { applicationDefault, cert, deleteApp, getApps, initializeApp, type App } from 'firebase-admin/app';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 import type { FirebaseAdminConfig } from '../../config/src/env.ts';
 import type {
@@ -9,6 +9,7 @@ import type {
   ScheduledTask,
 } from '../../shared/src/types.ts';
 import type { BotControlCommand, BotRuntimeSnapshot } from '../../shared/src/bot-control.ts';
+import { anonymizeGuildUserData } from '../../shared/src/guild-privacy.ts';
 import { safeIdSchema } from '../../shared/src/validation.ts';
 import { migrateDatabaseRoot } from '../../../database/schema-migrations.ts';
 import type { DatabaseAdapter } from './adapter.ts';
@@ -110,6 +111,15 @@ function assertSafeDocId(id: string, label: string): string {
   return parsed.data;
 }
 
+function containsUserId(value: unknown, userId: string): boolean {
+  if (value === userId) return true;
+  if (Array.isArray(value)) return value.some((entry) => containsUserId(entry, userId));
+  if (value && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).some((entry) => containsUserId(entry, userId));
+  }
+  return false;
+}
+
 export interface FirestoreAdapterOptions {
   firebaseConfig?: FirebaseAdminConfig | null;
   defaultGuildId?: string | null;
@@ -145,7 +155,7 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
 
     if (!this.client && !this.firebaseConfig) {
       throw new Error(
-        '[Database] FirestoreDatabaseAdapter requires server-side FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY.',
+        '[Database] FirestoreDatabaseAdapter requires FIREBASE_PROJECT_ID and server-side Application Default Credentials or service-account credentials.',
       );
     }
   }
@@ -169,16 +179,20 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
       throw new Error('[Firestore] Missing Firebase Admin SDK configuration.');
     }
     const appName = `shadowslayers-firestore-${this.firebaseConfig.projectId}`;
+    const credential =
+      this.firebaseConfig.clientEmail && this.firebaseConfig.privateKey
+        ? cert({
+            projectId: this.firebaseConfig.projectId,
+            clientEmail: this.firebaseConfig.clientEmail,
+            privateKey: this.firebaseConfig.privateKey,
+          })
+        : applicationDefault();
     const existingApp = getApps().find((a) => a.name === appName);
     this.app =
       existingApp ??
       initializeApp(
         {
-          credential: cert({
-            projectId: this.firebaseConfig.projectId,
-            clientEmail: this.firebaseConfig.clientEmail,
-            privateKey: this.firebaseConfig.privateKey,
-          }),
+          credential,
           projectId: this.firebaseConfig.projectId,
         },
         appName,
@@ -463,6 +477,169 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
           guildId: safeGuildId,
         }) as Record<string, unknown>,
       );
+    });
+  }
+
+  async anonymizeGuildUserData(guildId: string, userId: string): Promise<void> {
+    const safeGuildId = assertSafeDocId(guildId, 'guildId');
+    const safeUserId = assertSafeDocId(userId, 'userId');
+    const db = this.getClient();
+    const guild = await this.getGuild(safeGuildId);
+    if (!guild) throw new Error(`[Firestore] Cannot anonymize user data: guild "${safeGuildId}" does not exist.`);
+
+    const reminderIds = new Set(
+      guild.reminders.filter((reminder) => reminder.userId === safeUserId).map((reminder) => reminder.id),
+    );
+    const temporaryRoleIds = new Set(
+      guild.temporaryRoles.filter((grant) => grant.userId === safeUserId).map((grant) => grant.id),
+    );
+    const removedTaskIds = guild.scheduledTasks
+      .filter(
+        (task) =>
+          (task.type === 'reminder' && reminderIds.has(task.targetId)) ||
+          (task.type === 'temprole_expiry' && temporaryRoleIds.has(task.targetId)),
+      )
+      .map((task) => task.id);
+
+    await this.anonymizeGuildBotCommands(safeGuildId, safeUserId);
+    await this.saveGuild(anonymizeGuildUserData(guild, safeUserId));
+
+    const taskCollection = db.collection('guilds').doc(safeGuildId).collection('scheduledTasks');
+    await Promise.all(
+      removedTaskIds.map((taskId) =>
+        this.withRetry('anonymizeGuildUserData:deleteTask', () =>
+          taskCollection.doc(assertSafeDocId(taskId, 'taskId')).delete(),
+        ),
+      ),
+    );
+
+    const logCollection = db.collection('guilds').doc(safeGuildId).collection('logs');
+    const [actorLogs, targetLogs] = await this.withRetry('anonymizeGuildUserData:findLogs', () =>
+      Promise.all([
+        logCollection.where('actorId', '==', safeUserId).get(),
+        logCollection.where('targetId', '==', safeUserId).get(),
+      ]),
+    );
+    const affectedLogs = new Map<string, FirestoreDocSnapshotLike>();
+    for (const log of [...actorLogs.docs, ...targetLogs.docs]) affectedLogs.set(log.id, log);
+
+    const logEntries = [...affectedLogs.values()];
+    for (let start = 0; start < logEntries.length; start += 100) {
+      const batch = logEntries.slice(start, start + 100);
+      await Promise.all(
+        batch.map((log) =>
+          this.withRetry('anonymizeGuildUserData:writeLog', async () => {
+            const entry = log.data();
+            if (!entry) return;
+            const actorMatches = entry.actorId === safeUserId;
+            const targetMatches = entry.targetId === safeUserId;
+            await logCollection.doc(assertSafeDocId(log.id, 'logId')).set(
+              stripUndefined({
+                ...entry,
+                actorId: actorMatches ? '' : entry.actorId,
+                actorName: actorMatches ? 'Deleted user' : entry.actorName,
+                targetId: targetMatches ? null : entry.targetId,
+                targetName: targetMatches ? 'Deleted user' : entry.targetName,
+                summary: 'Audit activity retained after personal identifiers were removed.',
+                details: {},
+              }),
+            );
+          }),
+        ),
+      );
+    }
+  }
+
+  private async anonymizeGuildBotCommands(guildId: string, userId: string): Promise<void> {
+    const db = this.getClient();
+    const collection = db.collection('bot_control_commands');
+    const commands = await this.withRetry('anonymizeGuildBotCommands:list', () =>
+      collection.where('guildId', '==', guildId).get(),
+    );
+    const affected = commands.docs.filter((doc) => containsUserId(doc.data(), userId));
+    if (affected.some((doc) => doc.data()?.status === 'processing')) {
+      throw new Error('[Firestore] Cannot anonymize user data while a related bot command is processing.');
+    }
+
+    await Promise.all(
+      affected.map((command) => {
+        const ref = collection.doc(assertSafeDocId(command.id, 'botCommandId'));
+        return this.withRetry('anonymizeGuildBotCommands:update', () =>
+          db.runTransaction(async (tx) => {
+            const currentSnap = await tx.get(ref);
+            const current = currentSnap.data();
+            if (!current || !containsUserId(current, userId)) return;
+            if (current.status === 'processing') {
+              throw new Error('[Firestore] Cannot anonymize user data while a related bot command is processing.');
+            }
+
+            const now = new Date().toISOString();
+            tx.set(ref, {
+              id: current.id ?? command.id,
+              guildId,
+              operation: current.operation ?? 'privacy.anonymized',
+              payload: {},
+              actorUserId: '',
+              actorUsername: 'Deleted user',
+              signature: '',
+              status: current.status === 'queued' ? 'cancelled' : current.status,
+              createdAt: current.createdAt ?? now,
+              expiresAt: current.expiresAt ?? now,
+              completedAt: current.status === 'queued' ? now : (current.completedAt ?? null),
+              result: null,
+              resultSignature: null,
+              error: 'Command metadata anonymized after a personal-data deletion request.',
+            });
+          }),
+        );
+      }),
+    );
+  }
+
+  async pruneExpiredAuditLogs(nowIso: string): Promise<number> {
+    const nowMs = Date.parse(nowIso);
+    if (!Number.isFinite(nowMs)) {
+      throw new Error(`[Firestore] Cannot prune audit logs: invalid reference time "${nowIso}".`);
+    }
+    const db = this.getClient();
+
+    return this.withRetry('pruneExpiredAuditLogs', async () => {
+      const guildsSnap = await db.collection('guilds').get();
+      let removed = 0;
+
+      for (const guildDoc of guildsSnap.docs) {
+        const guild = guildDoc.data();
+        const logging = guild?.logging as { retentionDays?: unknown } | undefined;
+        const retentionDays = logging?.retentionDays;
+        if (typeof retentionDays !== 'number' || !Number.isFinite(retentionDays) || retentionDays < 0) {
+          throw new Error(
+            `[Firestore] Cannot prune audit logs: invalid retentionDays for guild "${guildDoc.id}".`,
+          );
+        }
+
+        const cutoffIso = new Date(nowMs - retentionDays * 86400_000).toISOString();
+        const logCollection = db
+          .collection('guilds')
+          .doc(assertSafeDocId(guildDoc.id, 'guildId'))
+          .collection('logs');
+
+        for (;;) {
+          const expired = await logCollection.where('createdAt', '<', cutoffIso).limit(500).get();
+          if (expired.docs.length === 0) break;
+
+          for (let start = 0; start < expired.docs.length; start += 100) {
+            const batch = expired.docs.slice(start, start + 100);
+            await Promise.all(
+              batch.map((doc) =>
+                logCollection.doc(assertSafeDocId(doc.id, 'logId')).delete(),
+              ),
+            );
+          }
+          removed += expired.docs.length;
+        }
+      }
+
+      return removed;
     });
   }
 

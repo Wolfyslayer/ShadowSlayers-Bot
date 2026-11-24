@@ -41,6 +41,7 @@ import type {
 } from '../packages/shared/src/types';
 import type { CompletenessReport } from '../packages/localization/src/engine';
 import { AuthGate } from './components/AuthGate';
+import { PrivacyDeletionView } from './components/PrivacyDeletionView';
 import { apiRequest } from './lib/api';
 import { useLocale } from './lib/LocaleProvider';
 import type { CommandDesc } from './components/views/CommandsView';
@@ -128,6 +129,7 @@ export default function App() {
   const [now, setNow] = useState(Date.now());
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [privacyMode, setPrivacyMode] = useState(false);
 
   const guildId = user?.guildId || 'shadowslayers-primary';
 
@@ -173,9 +175,28 @@ export default function App() {
       .catch((err) => setLoadError(err instanceof Error ? err.message : t('Failed to load authorized servers')));
   }, [token, t]);
 
+  const signOut = () => {
+    setToken(null);
+    setUser(null);
+    setData(null);
+    setHealth(null);
+    setApiStatus('checking');
+    setActiveTab('overview');
+  };
+
+  if (privacyMode) {
+    return (
+      <PrivacyDeletionView
+        onBack={() => setPrivacyMode(false)}
+        onCompleted={signOut}
+      />
+    );
+  }
+
   if (!token || !user) {
     return (
       <AuthGate
+        onPrivacyRequest={() => setPrivacyMode(true)}
         onAuthenticated={(newToken, newUser) => {
           setToken(newToken);
           setUser(newUser);
@@ -201,15 +222,6 @@ export default function App() {
       : uptimeMinutes >= 60
         ? `${Math.floor(uptimeMinutes / 60)}h ${uptimeMinutes % 60}m`
         : `${uptimeMinutes}m`;
-
-  const signOut = () => {
-    setToken(null);
-    setUser(null);
-    setData(null);
-    setHealth(null);
-    setApiStatus('checking');
-    setActiveTab('overview');
-  };
 
   const renderNavigationItem = (item: (typeof PRIMARY_NAV)[number] | (typeof GUILD_TOOLS_NAV)[number]) => {
     const Icon = item.icon;
@@ -415,6 +427,13 @@ export default function App() {
               <div className="absolute right-0 top-full z-30 mt-2 w-56 rounded-xl border border-white/10 bg-[#151124] p-3 shadow-2xl shadow-black/50">
                 <p className="truncate text-sm font-medium text-white">{user.username}</p>
                 <p className="mt-1 truncate text-xs text-slate-400">{displayName}</p>
+                <button
+                  type="button"
+                  onClick={() => setPrivacyMode(true)}
+                  className="mt-3 w-full rounded-lg px-3 py-2 text-left text-sm text-slate-200 hover:bg-white/[0.06]"
+                >
+                  {t('Delete my ShadowSlayers data')}
+                </button>
                 <button type="button" onClick={signOut} className="mt-3 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-200 hover:bg-red-400/10">
                   <LogOut className="h-4 w-4" aria-hidden="true" />
                   {t('Sign out')}

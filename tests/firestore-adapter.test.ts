@@ -62,7 +62,23 @@ function createInMemoryFirestoreClient(opts?: { failTransientCount?: number; fat
         const parts = k.split('/');
         if (k.startsWith(`${prefix}/`) && parts.length === depth) {
           const id = parts[parts.length - 1];
-          const matches = filters.every((f) => f.op === '==' && v[f.field] === f.value);
+          const matches = filters.every((f) => {
+            const actual = v[f.field];
+            if (f.op === '==') return actual === f.value;
+            if (typeof actual === 'string' && typeof f.value === 'string') {
+              if (f.op === '<') return actual < f.value;
+              if (f.op === '<=') return actual <= f.value;
+              if (f.op === '>') return actual > f.value;
+              if (f.op === '>=') return actual >= f.value;
+            }
+            if (typeof actual === 'number' && typeof f.value === 'number') {
+              if (f.op === '<') return actual < f.value;
+              if (f.op === '<=') return actual <= f.value;
+              if (f.op === '>') return actual > f.value;
+              if (f.op === '>=') return actual >= f.value;
+            }
+            return false;
+          });
           if (matches) docs.push(makeSnap(id, v));
         }
       }
@@ -177,6 +193,198 @@ test('FirestoreDatabaseAdapter initializes meta + default guild, isolates guilds
   const betaAfter = await adapter.getGuild('guild-beta');
   assert.ok(alphaAfter?.logs.some((l) => l.id === 'log-alpha-custom'));
   assert.equal(betaAfter?.logs.some((l) => l.id === 'log-alpha-custom'), false);
+});
+
+test('Firestore log retention deletes expired subcollection entries in pages and respects guild settings', async () => {
+  const { client, store } = createInMemoryFirestoreClient();
+  const adapter = new FirestoreDatabaseAdapter({
+    client,
+    defaultGuildId: 'guild-retention-alpha',
+    retryBaseDelayMs: 1,
+  });
+  await adapter.init();
+
+  const beta = createInitialGuildSeed('guild-retention-beta');
+  beta.logging.retentionDays = 30;
+  await adapter.saveGuild(beta);
+
+  const nowMs = Date.now();
+  const daysAgo = (days: number) => new Date(nowMs - days * 86400_000).toISOString();
+  for (let i = 0; i < 501; i += 1) {
+    store.set(`guilds/guild-retention-alpha/logs/expired-alpha-${i}`, {
+      createdAt: daysAgo(100),
+    });
+  }
+  store.set('guilds/guild-retention-alpha/logs/retained-alpha', { createdAt: daysAgo(80) });
+  store.set('guilds/guild-retention-beta/logs/expired-beta', { createdAt: daysAgo(31) });
+  store.set('guilds/guild-retention-beta/logs/retained-beta', { createdAt: daysAgo(29) });
+
+  const removed = await adapter.pruneExpiredAuditLogs(new Date(nowMs).toISOString());
+
+  assert.equal(removed, 502);
+  assert.equal(store.has('guilds/guild-retention-alpha/logs/expired-alpha-0'), false);
+  assert.equal(store.has('guilds/guild-retention-alpha/logs/expired-alpha-500'), false);
+  assert.equal(store.has('guilds/guild-retention-alpha/logs/retained-alpha'), true);
+  assert.equal(store.has('guilds/guild-retention-beta/logs/expired-beta'), false);
+  assert.equal(store.has('guilds/guild-retention-beta/logs/retained-beta'), true);
+});
+
+test('Firestore personal-data deletion is guild-scoped and anonymizes logs and bot commands', async () => {
+  const { client, store } = createInMemoryFirestoreClient();
+  const adapter = new FirestoreDatabaseAdapter({
+    client,
+    defaultGuildId: 'guild-privacy-alpha',
+    retryBaseDelayMs: 1,
+  });
+  await adapter.init();
+
+  const userId = '12345678901234567';
+  const alpha = await adapter.getGuild('guild-privacy-alpha');
+  assert.ok(alpha);
+  alpha.members = [{ ...alpha.members[0], userId }];
+  alpha.reminders = [
+    {
+      id: 'privacy-reminder',
+      userId,
+      username: 'PrivacyUser',
+      channelName: 'general',
+      message: 'Personal reminder',
+      remindAt: new Date().toISOString(),
+      completed: false,
+      createdAt: new Date().toISOString(),
+    },
+  ];
+  alpha.scheduledTasks = [
+    {
+      id: 'privacy-reminder-task',
+      guildId: alpha.guildId,
+      type: 'reminder',
+      targetId: 'privacy-reminder',
+      description: 'Personal reminder',
+      runAt: new Date().toISOString(),
+      status: 'pending',
+      attempts: 0,
+      lastError: null,
+      completedAt: null,
+      createdAt: new Date().toISOString(),
+    },
+  ];
+  await adapter.saveGuild(alpha);
+
+  const beta = createInitialGuildSeed('guild-privacy-beta');
+  beta.members = [{ ...beta.members[0], userId }];
+  await adapter.saveGuild(beta);
+
+  await adapter.appendAuditLog('guild-privacy-alpha', {
+    id: 'privacy-alpha-log',
+    guildId: 'guild-privacy-alpha',
+    category: 'moderation',
+    actorId: userId,
+    actorName: 'PrivacyUser',
+    targetId: userId,
+    targetName: 'PrivacyUser',
+    summary: 'Personal activity',
+    details: { userId },
+    createdAt: new Date().toISOString(),
+  });
+  await adapter.appendAuditLog('guild-privacy-beta', {
+    id: 'privacy-beta-log',
+    guildId: 'guild-privacy-beta',
+    category: 'moderation',
+    actorId: userId,
+    actorName: 'PrivacyUser',
+    targetId: null,
+    targetName: null,
+    summary: 'Other guild activity',
+    details: {},
+    createdAt: new Date().toISOString(),
+  });
+  store.set('bot_control_commands/privacy-command', {
+    id: 'privacy-command',
+    guildId: 'guild-privacy-alpha',
+    operation: 'moderation.execute',
+    payload: { targetUserId: userId, reason: 'Personal reason' },
+    actorUserId: userId,
+    actorUsername: 'PrivacyUser',
+    signature: 'signature',
+    status: 'completed',
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  store.set('bot_control_commands/privacy-queued-command', {
+    id: 'privacy-queued-command',
+    guildId: 'guild-privacy-alpha',
+    operation: 'command.execute',
+    payload: { actorUserId: userId, args: { value: 'private' } },
+    actorUserId: userId,
+    actorUsername: 'PrivacyUser',
+    signature: 'queued-signature',
+    status: 'queued',
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+
+  await adapter.anonymizeGuildUserData('guild-privacy-alpha', userId);
+
+  const alphaAfter = await adapter.getGuild('guild-privacy-alpha');
+  const betaAfter = await adapter.getGuild('guild-privacy-beta');
+  assert.ok(alphaAfter);
+  assert.ok(betaAfter);
+  assert.equal(alphaAfter.members.some((member) => member.userId === userId), false);
+  assert.equal(alphaAfter.reminders.some((reminder) => reminder.userId === userId), false);
+  assert.equal(betaAfter.members.some((member) => member.userId === userId), true);
+  assert.equal(store.has('guilds/guild-privacy-alpha/scheduledTasks/privacy-reminder-task'), false);
+
+  const alphaLog = store.get('guilds/guild-privacy-alpha/logs/privacy-alpha-log');
+  const betaLog = store.get('guilds/guild-privacy-beta/logs/privacy-beta-log');
+  assert.equal(alphaLog?.actorId, '');
+  assert.equal(alphaLog?.targetId, null);
+  assert.deepEqual(alphaLog?.details, {});
+  assert.equal(betaLog?.actorId, userId);
+
+  const command = store.get('bot_control_commands/privacy-command');
+  assert.equal(command?.actorUserId, '');
+  assert.equal(command?.status, 'completed');
+  assert.deepEqual(command?.payload, {});
+  const queuedCommand = store.get('bot_control_commands/privacy-queued-command');
+  assert.equal(queuedCommand?.actorUserId, '');
+  assert.equal(queuedCommand?.status, 'cancelled');
+  assert.deepEqual(queuedCommand?.payload, {});
+});
+
+test('Firestore personal-data deletion waits for related processing commands before changing guild data', async () => {
+  const { client, store } = createInMemoryFirestoreClient();
+  const adapter = new FirestoreDatabaseAdapter({
+    client,
+    defaultGuildId: 'guild-privacy-processing',
+    retryBaseDelayMs: 1,
+  });
+  await adapter.init();
+
+  const userId = '12345678901234567';
+  const guild = await adapter.getGuild('guild-privacy-processing');
+  assert.ok(guild);
+  guild.members = [{ ...guild.members[0], userId }];
+  await adapter.saveGuild(guild);
+  store.set('bot_control_commands/privacy-processing-command', {
+    id: 'privacy-processing-command',
+    guildId: 'guild-privacy-processing',
+    operation: 'moderation.execute',
+    payload: { targetUserId: userId },
+    actorUserId: '22345678901234567',
+    actorUsername: 'Moderator',
+    signature: 'signature',
+    status: 'processing',
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+
+  await assert.rejects(
+    adapter.anonymizeGuildUserData('guild-privacy-processing', userId),
+    /related bot command is processing/,
+  );
+  const unchanged = await adapter.getGuild('guild-privacy-processing');
+  assert.ok(unchanged?.members.some((member) => member.userId === userId));
 });
 
 test('Firestore bot-control queue atomically claims, completes, expires, and reports runtime status without a default guild', async () => {
@@ -346,14 +554,24 @@ test('FirestoreDatabaseAdapter retries transient errors, surfaces fatal errors, 
   assert.equal(upgraded?.members[1].clanRank, null);
 });
 
-test('Database factory rejects firestore without credentials and rejects unimplemented supabase', () => {
+test('Database factory supports platform credentials and rejects missing project configuration', () => {
   assert.throws(
     () => createDatabaseAdapter('firestore', '.data/test.json', 'shadowslayers-primary', 'development', null),
-    /requires FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY/,
+    /requires FIREBASE_PROJECT_ID and either service-account credentials or platform Application Default Credentials/,
   );
   assert.throws(
     () => createDatabaseAdapter('firestore', '.data/test.json', 'shadowslayers-primary', 'production', null),
-    /Silent fallback to local JSON storage is forbidden in production/,
+    /FIREBASE_PROJECT_ID is not configured/,
+  );
+  assert.equal(
+    createDatabaseAdapter(
+      'firestore',
+      '.data/test.json',
+      'shadowslayers-primary',
+      'production',
+      { projectId: 'shadowslayers-test' },
+    ).driverName,
+    'firestore',
   );
   assert.throws(
     () => createDatabaseAdapter('supabase', '.data/test.json', 'shadowslayers-primary', 'development', null),

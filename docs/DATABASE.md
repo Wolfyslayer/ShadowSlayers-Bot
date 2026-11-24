@@ -32,12 +32,12 @@ All collections enforce server-level isolation via `guildId` and consistent ISO-
 19. `clanConfig` — Admin-configured game catalog, ordered game-rank labels, game-specific classes, and the separate bot rank hierarchy
 20. `teams` — Clan squads, leaders, member rosters, raid/dungeon schedules, attendance records
 21. `achievements` — Unlockable badges & criteria
-22. `scheduledTasks` — Persistent idempotent task queue (`tempban_expiry`, `temprole_expiry`, `reminder`, `giveaway_draw`, `event_notify`, `birthday`, `scheduled_announcement`, `log_cleanup`, `inactivity_report`)
+22. `scheduledTasks` — Persistent idempotent task queue (`tempban_expiry`, `temprole_expiry`, `reminder`, `giveaway_draw`, `event_notify`, `birthday`, `scheduled_announcement`, legacy `log_cleanup`, `inactivity_report`)
 
 ## 3. Migrations, Backups & Deleted Member Safety
 - Schema versioning is tracked via `schemaVersion` and upgraded deterministically by `database/schema-migrations.ts`.
 - Deleted Discord members retain historical moderation cases, ticket transcripts, and logs using immutable `userId` + cached `usernameSnapshot` (`isDeparted: true`) so audit trails never break.
-- Backups: Export/import snapshot JSON via `/api/guild/:guildId/backup` (admin-only) or Firebase CLI / scheduled Firestore exports.
+- Backups: `/api/guild/:guildId/backup` returns a JSON export for only the authorized guild. Firebase CLI/scheduled Firestore exports are separate operator-managed backups; no schedule is configured by this repository.
 
 ## 4. Production Firestore Implementation (`FirestoreDatabaseAdapter`)
 - **Package**: `packages/database/src/firestore-adapter.ts`
@@ -71,6 +71,8 @@ Game catalogs start empty. Server administrators with `clan.manage` can add game
 
 ## 6. Runtime Ownership and Verification
 - Only the persistent bot process starts the scheduler. The standalone trusted API does not start a Discord Gateway or scheduler; its manual scheduler endpoint returns HTTP 503 rather than claiming work was executed.
+- The scheduler prunes expired audit logs on startup and then once per day. Firestore cleanup queries and deletes expired `logs` subcollection documents in bounded pages; local mode prunes each guild's log array. Failures are reported and retried on the next maintenance interval.
+- The trusted API can anonymize a user's data in one selected guild after Discord identity verification. It removes or anonymizes records matched by Discord user ID, processes the Firestore log subcollection and bot-control queue, and does not affect other guilds or provider backups. Username-only legacy fields cannot always be attributed reliably.
 - Guild-scoped API access is bound to a guild ID authorized by the Discord OAuth session, in addition to the session capability check. No `DISCORD_GUILD_ID` setting is required; the bot discovers its installed guilds at startup.
 - Schema migration runs when the Admin adapter initializes and reads a guild document. Automated migration/adapter tests use local fixtures and mocked Firestore interfaces; no live Firebase project was available for this phase.
 - Failed audit-log or task-status writes for unknown guilds/tasks throw explicit errors instead of being silently dropped.
