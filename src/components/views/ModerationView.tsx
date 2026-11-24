@@ -142,7 +142,7 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                 <th className="py-2 pr-3 font-medium">Case ID</th>
                 <th className="py-2 pr-3 font-medium">Action</th>
                 <th className="py-2 pr-3 font-medium">Target</th>
-                <th className="py-2 pr-3 font-medium">Moderator</th>
+                <th className="py-2 pr-3 font-medium">Discord</th>
                 <th className="py-2 font-medium">Reason</th>
               </tr>
             </thead>
@@ -152,7 +152,20 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
                   <td className="py-2 pr-3 font-mono-tabular text-xs text-amber-400">{c.caseId}</td>
                   <td className="py-2 pr-3 font-mono-tabular text-xs text-slate-200">{c.action}</td>
                   <td className="py-2 pr-3 text-slate-200">{c.targetUsername}</td>
-                  <td className="py-2 pr-3 text-xs text-slate-400">{c.moderatorUsername}</td>
+                  <td className="py-2 pr-3 font-mono-tabular text-xs">
+                    <span
+                      className={
+                        c.discordExecutionStatus === 'verified_live'
+                          ? 'text-emerald-400'
+                          : c.discordExecutionStatus === 'failed'
+                            ? 'text-red-400'
+                            : 'text-slate-400'
+                      }
+                      title={c.discordError || undefined}
+                    >
+                      {c.discordExecutionStatus}
+                    </span>
+                  </td>
                   <td className="py-2 text-xs text-slate-300">{c.reason}</td>
                 </tr>
               ))}

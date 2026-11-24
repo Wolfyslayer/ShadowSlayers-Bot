@@ -69,7 +69,7 @@ export const RolesView: React.FC<RolesViewProps> = ({ guild, onCreatePanel, onPu
         <div>
           <h2 className="font-display text-xl font-semibold text-slate-100">Role Panels & Carl-bot Replacement</h2>
           <p className="text-sm text-slate-400 mt-1">
-            Configure button, select-menu, and reaction panels. Publishing executes <span className="font-mono-tabular text-slate-200">/roles publish</span> only — never full server setup.
+            Language (exclusive), Class (exclusive), and Notification (multiple) self-role panels. Clan ranks remain leadership-assigned only. Publishing executes <span className="font-mono-tabular text-slate-200">/roles publish</span> only — never full server setup.
           </p>
         </div>
         <button

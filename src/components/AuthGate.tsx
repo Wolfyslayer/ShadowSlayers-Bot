@@ -29,8 +29,22 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onAuthenticated }) => {
   }, []);
 
   useEffect(() => {
+    const allowedPopupOrigins = new Set<string>([window.location.origin]);
+    const configuredApiBase = (import.meta.env.VITE_API_BASE_URL || '').trim();
+    if (configuredApiBase) {
+      try {
+        allowedPopupOrigins.add(new URL(configuredApiBase).origin);
+      } catch {
+        // ignore invalid VITE_API_BASE_URL
+      }
+    }
+
     const handleMessage = async (event: MessageEvent) => {
-      if (!event.origin.endsWith('.run.app') && !event.origin.includes('localhost') && !event.origin.endsWith('.github.io')) {
+      if (!allowedPopupOrigins.has(event.origin)) {
+        return;
+      }
+      if (event.data?.type === 'OAUTH_AUTH_ERROR' && typeof event.data.error === 'string') {
+        setError(event.data.error);
         return;
       }
       if (event.data?.type === 'OAUTH_AUTH_SUCCESS' && typeof event.data.token === 'string') {

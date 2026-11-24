@@ -35,7 +35,7 @@
 ```
 
 ## 3. Existing Discord Server Discovery Principle
-Before any setup operation runs, `apps/bot/src/services/discovery.ts` scans the target guild:
-1. Matches existing categories (`Gate of Shadows`, `Common Hall`, `Language Realms`, `Legends of Elements`, `ShadowSlayers`, `Inner Sanctum`, `Voice Chambers`).
-2. Maps existing hierarchy roles (`Shadow King`, `Shadow Council`, `Warlord`, `Elite Warrior`, `ShadowSlayer`, `Recruit`, `English`, `Русский`, `Bots`, `✅ Verified`).
-3. Produces an additive-only diff preview. Existing roles are **never** deleted or renamed, and existing permissions are **never** overwritten without explicit administrator confirmation.
+Before any setup operation runs, `apps/bot/src/services/discovery.ts` scans the target guild against `packages/shared/src/legacy-template.ts`:
+1. Matches all 9 legacy categories (`📜 01 — GATE OF SHADOWS`, `🔥 02 — THE COMMON HALL`, `🌍 03 — LANGUAGE REALMS`, `⚔️ 04 — LEGENDS OF ELEMENTS`, `🧙 05 — CLASS HALLS`, `🖤 06 — SHADOWSLAYERS`, `👑 07 — THE INNER SANCTUM`, `🔊 08 — VOICE CHAMBERS`, `🏰 09 — CLAN VOICE`), existing channels, uncategorized channels, and permission overwrites.
+2. Maps all 16 legacy roles (`👑 Shadow King`, `🛡️ Shadow Council`, `⚔️ Warlord`, `🔥 Elite Warrior`, `🖤 ShadowSlayer`, `🌱 Recruit`, `⚔️ Warrior`, `🔮 Sorcerer`, `🗡️ Swordsman`, `📢 Event Pings`, `🐉 Boss Pings`, `🏆 PvP Pings`, `🇬🇧 English`, `🇷🇺 Русский`, `🤖 Bots`, `✅ Verified`) using exact match or single controlled alias, blocking automatic selection on ambiguous candidates (`conflicting`).
+3. Produces an additive-only diff preview and only marks changes `applied` after verified Discord API creation returns a real ID. Existing roles/channels are **never** deleted, renamed, or permission-overwritten. See `docs/LEGACY_COMPATIBILITY_AUDIT.md`.

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CLAN_RANK_ORDER } from './types.ts';
 
 export const safeIdSchema = z
   .string()
@@ -116,9 +117,10 @@ export const rolePanelCreateSchema = z.object({
 });
 
 export const memberUpdateSchema = z.object({
-  clanRank: z.enum(['Shadow King', 'Shadow Council', 'Warlord', 'Elite Warrior', 'ShadowSlayer', 'Recruit']).optional(),
+  clanRank: z.enum(CLAN_RANK_ORDER as [import('./types.ts').ClanRankName, ...import('./types.ts').ClanRankName[]]).optional(),
   languageCodes: z.array(z.string().min(2).max(12)).max(20).optional(),
   gamingClasses: z.array(z.string().min(1).max(50)).max(10).optional(),
+  notificationRoles: z.array(z.string().min(1).max(60)).max(20).optional(),
   verified: z.boolean().optional(),
   customBio: z.string().max(300).optional(),
 });

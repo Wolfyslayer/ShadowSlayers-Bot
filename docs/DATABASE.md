@@ -1,10 +1,10 @@
 # Database Architecture – ShadowSlayers – Legends of Elements
 
-## 1. Abstraction Strategy (Firestore First, Supabase Portable)
+## 1. Abstraction Strategy (Firestore First, Supabase Portable, No Silent Fallback)
 All application modules read and write through the `DatabaseAdapter` interface in `packages/database/src/adapter.ts`.
-- **Preview / Local Mode (`LocalPersistentAdapter`)**: Atomic JSON-backed store in `.data/shadowslayers-db.json` enabling full persistent functionality out of the box without external credentials.
-- **Production Primary (`FirestoreAdapter`)**: Designed for Firebase Spark (Cloud Firestore) using server-side credentials in the trusted Node.js bot runtime, scoped strictly under `/guilds/{guildId}/...` for multi-server isolation.
-- **Fallback (`SupabaseAdapter`)**: Cleanly swappable relational adapter implementing the same `DatabaseAdapter` contract.
+- **Explicit Local Mode (`DATABASE_ADAPTER=local` -> `LocalPersistentAdapter`)**: Atomic JSON-backed store in `.data/shadowslayers-db.json` for local/preview development.
+- **Production Primary (`DATABASE_ADAPTER=firestore`)**: Designed for Firebase Spark (Cloud Firestore) using server-side credentials. If `firestore` is selected without live credentials/SDK wiring, startup fails explicitly instead of silently falling back to ephemeral local JSON.
+- **Fallback (`DATABASE_ADAPTER=supabase`)**: Portable relational adapter contract; fails explicitly if requested without provisioned SDK credentials.
 
 ## 2. Core Collections (22 Structured Entities)
 All collections enforce server-level isolation via `guildId` and consistent ISO-8601 timestamps (`createdAt`, `updatedAt`):

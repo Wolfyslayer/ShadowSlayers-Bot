@@ -12,7 +12,7 @@ All commands enforce RBAC permission validation, localized responses, structured
 - `/dashboard` — Retrieve direct link to the administration web dashboard
 
 ## Setup & Administration
-- `/setup` — Discover existing server structure and preview non-destructive setup diff
+- `/setup` — Ephemeral, initiator-locked server discovery preview (`Missing only`, two-step confirmed `Full setup`, `Cancel`, partial-failure retry)
 - `/config` — Inspect or update core guild configuration values
 - `/permissions` — View role hierarchy and permission capability matrix
 

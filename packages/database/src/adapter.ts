@@ -25,8 +25,8 @@ export interface DatabaseAdapter {
 }
 
 /**
- * Atomic file-backed persistent adapter for preview, development, and self-contained Lunafy local storage.
- * Implements the exact DatabaseAdapter interface so Firestore or Supabase adapters can swap in cleanly.
+ * Atomic file-backed persistent adapter for explicit local/development storage.
+ * Implements the exact DatabaseAdapter interface so Firestore or Supabase adapters can plug in cleanly.
  */
 export class LocalPersistentAdapter implements DatabaseAdapter {
   readonly driverName = 'local' as const;
@@ -97,7 +97,6 @@ export class LocalPersistentAdapter implements DatabaseAdapter {
     const guild = this.state.guilds[guildId];
     if (!guild) return;
     guild.logs.unshift(entry);
-    // Prune logs older than configured retentionDays
     const cutoff = Date.now() - guild.logging.retentionDays * 86400_000;
     guild.logs = guild.logs
       .filter((l) => new Date(l.createdAt).getTime() >= cutoff)
@@ -138,12 +137,20 @@ export function createDatabaseAdapter(
   adapterType: 'local' | 'firestore' | 'supabase',
   localDbPath: string,
   defaultGuildId: string,
+  nodeEnv = process.env.NODE_ENV || 'development',
 ): DatabaseAdapter {
-  // When user provides external Firebase or Supabase credentials on Lunafy,
-  // dedicated drivers plug into this exact DatabaseAdapter interface.
   if (adapterType === 'firestore' || adapterType === 'supabase') {
-    console.warn(
-      `[Database] Adapter "${adapterType}" selected without active external client provisioning in preview; falling back cleanly to LocalPersistentAdapter.`,
+    if (nodeEnv === 'production') {
+      throw new Error(
+        `[Database] Production startup aborted: DATABASE_ADAPTER="${adapterType}" was selected, ` +
+          `but external ${adapterType} runtime driver/credentials are not provisioned. ` +
+          `Silent fallback to local JSON storage is forbidden in production. ` +
+          `Configure ${adapterType} credentials or explicitly set DATABASE_ADAPTER=local for local testing.`,
+      );
+    }
+    throw new Error(
+      `[Database] DATABASE_ADAPTER="${adapterType}" is not yet wired to live ${adapterType} SDK credentials in this environment. ` +
+        `Set DATABASE_ADAPTER=local for explicit local development mode.`,
     );
   }
   return new LocalPersistentAdapter(localDbPath, defaultGuildId);

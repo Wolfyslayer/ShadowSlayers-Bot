@@ -6,59 +6,74 @@
 
 | Metric | Status |
 | :--- | :--- |
-| **Current Phase** | Phase 18 – Deployment & Launch Readiness (Core Platform Verified) |
-| **Completed Tasks** | 72 / 76 |
-| **Remaining Tasks** | 4 / 76 (External user runtime secrets & live Lunafy / GitHub Pages push) |
-| **Blocked Tasks** | 0 |
-| **Overall Completion** | 95% |
-| **Test Status** | Passing (`npm test`: 6/6 tests pass, `tsc --noEmit`: 0 errors, `vite build`: clean) |
+| **Current Phase** | Phase 0.1 – Legacy Bot Compatibility, Server Setup Audit & Foundation Corrections (On Feature Branch) |
+| **Verification Model** | Every phase tracks 5 gates: **Implemented**, **Automated Tests Passed**, **Live Discord Test Passed**, **Reviewed & Approved**, **Deployed** |
+| **Automated Implementation Progress** | Core architecture + Phase 0.1 compatibility corrections implemented & tested with **mocked Discord API objects**; **Live Discord Server Verification Pending** (`DISCORD_BOT_TOKEN` & live guild test required) |
+| **Blocked / External Dependencies** | `Wolfyslayer/shadow-slayers-discord-setup` inaccessible (HTTP 404 from sandbox); live Discord Gateway & external Firestore/GitHub remote pending deployment |
+| **Test Status** | Updated in `tests/platform.test.ts` (unit + mocked Discord API integration tests only; NOT live Discord tests) |
 
 ---
 
 ## Phase 0 – Project Foundation
 - **Goals**: Establish monorepo-style modular workspace, TypeScript configuration, environment templates, documentation baseline, and CI pipeline.
-- **Features**: Modular package boundaries (`shared`, `config`, `permissions`, `localization`, `database`), GitHub Actions CI, environment safety.
-- **Required Files**: `package.json`, `tsconfig.json`, `.env.example`, `.gitignore`, `ROADMAP.md`, `AI_WORKFLOW.md`, `docs/ARCHITECTURE.md`, `.github/workflows/ci.yml`.
-- **Dependencies**: None.
+- **Verification Gates**:
+  - [x] Implemented
+  - [x] Automated Tests Passed (`tsc --noEmit`, `vite build`, `npm test`)
+  - [ ] Live Discord Test Passed (N/A for static workspace scaffold; runtime verified in Phase 0.1+)
+  - [ ] Reviewed & Approved
+  - [ ] Deployed
 - **Implementation Tasks**:
   - [x] Configure TypeScript, Express + Vite unified runtime, and npm scripts
   - [x] Create `.env.example` with placeholders only and hardened `.gitignore`
   - [x] Author `ROADMAP.md`, `AI_WORKFLOW.md`, and `docs/*`
   - [x] Configure GitHub Actions CI & GitHub Pages workflow
-- **Acceptance Criteria**: `tsc --noEmit` passes with zero errors; no secrets committed; all docs present.
-- **Tests**: Typecheck & lint verification (`tsc --noEmit` passed).
-- **Risks**: Accidental secret leakage or circular imports across packages.
-- **Documentation Requirements**: `ARCHITECTURE.md`, `AI_WORKFLOW.md`, `DEPLOYMENT.md`.
+
+## Phase 0.1 – Legacy Compatibility Audit & Foundation Corrections
+- **Goals**: Preserve exact ShadowSlayers Discord server compatibility (`16` emoji-prefixed roles, `9` categories, `25` template channels), harden OAuth2 authorization, remove `@google/genai`, enforce DB non-fallback, and implement ephemeral `/setup` workflow.
+- **Verification Gates**:
+  - [x] Implemented (on branch `phase-0.1/legacy-compatibility-audit`)
+  - [x] Automated Tests Passed (unit & mocked Discord API integration tests in `tests/platform.test.ts`)
+  - [ ] Live Discord Test Passed (Requires live `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, and `Wolfyslayer/shadow-slayers-discord-setup` access)
+  - [ ] Reviewed & Approved
+  - [ ] Deployed
+- **Implementation Tasks**:
+  - [x] Document compatibility gaps & corrective actions in `docs/LEGACY_COMPATIBILITY_AUDIT.md`
+  - [x] Implement exact 16-role / 9-category template + controlled alias & multi-candidate conflict rejection
+  - [x] Implement 9-state resource lifecycle (`discovered` .. `applied` / `failed`), never marking `applied` without verified Discord ID
+  - [x] Implement ephemeral initiator-locked `/setup` command (`Missing only`, `Full setup` 2-step confirm, `Cancel`, partial-failure retry)
+  - [x] Fix OAuth2 default-deny guild & role authorization + exact `postMessage` & CORS origins
+  - [x] Remove `@google/genai` completely and enforce non-fallback on `firestore`/`supabase` DB adapters
+  - [x] Wire live Discord execution status (`verified_live` / `dry_run_no_bot` / `failed`) on moderation & `/roles publish`
+  - [ ] Execute live test against target ShadowSlayers Discord guild and cross-check private repo `Wolfyslayer/shadow-slayers-discord-setup`
 
 ## Phase 1 – Discord Core
 - **Goals**: Build a single, centralized Discord Gateway client in Node.js for Lunafy hosting with automatic recovery and slash-command registration.
-- **Features**: Centralized Gateway client, graceful reconnect/error handling, `/help`, `/about`, `/server`, `/modules`, `/dashboard`, `/config`.
-- **Required Files**: `apps/bot/src/index.ts`, `apps/bot/src/commands/registry.ts`, `packages/config/src/env.ts`.
-- **Dependencies**: Phase 0.
+- **Verification Gates**:
+  - [x] Implemented
+  - [x] Automated Tests Passed (command registry & interaction routing tested with mocks)
+  - [ ] Live Discord Test Passed (Requires live Discord Gateway token)
+  - [ ] Reviewed & Approved
+  - [ ] Deployed
 - **Implementation Tasks**:
   - [x] Implement single Discord Gateway `Client` with intents and error recovery
   - [x] Build modular slash-command registry & interaction dispatcher
   - [x] Implement general utility and diagnostic commands
-  - [x] Add live command simulation endpoint for preview testing without token
-- **Acceptance Criteria**: Bot boots cleanly when `DISCORD_BOT_TOKEN` is set; gracefully idles when absent; command handlers validate permissions.
-- **Tests**: Unit tests for command registry completeness and permission guards (`tests/platform.test.ts` passed).
-- **Risks**: Discord rate limits during slash command bulk registration.
-- **Documentation Requirements**: `COMMANDS.md`, `MODULES.md`.
+  - [x] Add live command simulation endpoint clearly marked `dry_run_no_bot` when bot is offline
 
 ## Phase 2 – Server Discovery
 - **Goals**: Non-destructive discovery and mapping of existing Discord server structure before any write operations.
-- **Features**: Discovery of 7 existing categories (`Gate of Shadows`, `Common Hall`, `Language Realms`, `Legends of Elements`, `ShadowSlayers`, `Inner Sanctum`, `Voice Chambers`) and 9 existing roles (`Shadow King` through `Bots`), conflict detection, diff preview, explicit confirmation gate.
-- **Required Files**: `apps/bot/src/services/discovery.ts`, `packages/shared/src/types.ts`.
-- **Dependencies**: Phase 1.
+- **Features**: Discovery of all 9 existing categories (`📜 01 — GATE OF SHADOWS` through `🏰 09 — CLAN VOICE`), all 16 legacy roles (`👑 Shadow King` through `✅ Verified`), permission overwrites, role positions, uncategorized channels, conflict detection, diff preview, and explicit confirmation gate.
+- **Verification Gates**:
+  - [x] Implemented
+  - [x] Automated Tests Passed (mocked Discord Guild discovery, alias, conflict, and additive setup tests)
+  - [ ] Live Discord Test Passed
+  - [ ] Reviewed & Approved
+  - [ ] Deployed
 - **Implementation Tasks**:
-  - [x] Implement non-destructive category, channel, and role scanner
-  - [x] Map existing Discord IDs to ShadowSlayers internal config
+  - [x] Implement non-destructive category, channel, uncategorized channel, overwrite, and role scanner
+  - [x] Map existing Discord IDs via exact match or single controlled alias (block ambiguous fuzzy matches)
   - [x] Generate proposed setup diff preview without mutating existing roles/permissions
-  - [x] Enforce explicit confirmation token before applying additive changes
-- **Acceptance Criteria**: Existing roles are never deleted or renamed; existing permissions are never overwritten; equivalent channels are mapped rather than duplicated.
-- **Tests**: Discovery diff logic compiled and verified via API.
-- **Risks**: Duplicate channel creation if naming normalization fails.
-- **Documentation Requirements**: `ARCHITECTURE.md` (Discovery section).
+  - [x] Enforce explicit confirmation gate and verified-ID tracking before marking `applied`
 
 ## Phase 3 – Multilingual Foundation
 - **Goals**: Establish deterministic, non-AI translation resource architecture supporting English (default) and Russian.

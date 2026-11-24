@@ -192,9 +192,10 @@ export const MembersView: React.FC<MembersViewProps> = ({ guild, onUpdateMember 
                 </div>
               </div>
 
-              <div className="pt-3 border-t border-slate-800 text-xs text-slate-400">
-                <p>Classes: {selected.gamingClasses.join(', ') || 'None'}</p>
-                <p className="mt-1">
+              <div className="pt-3 border-t border-slate-800 text-xs text-slate-400 space-y-1">
+                <p>Class: {selected.gamingClasses.join(', ') || 'None'}</p>
+                <p>Notifications: {selected.notificationRoles.join(', ') || 'None'}</p>
+                <p>
                   Moderation Cases: {guild.moderationCases.filter((c) => c.targetUserId === selected.userId).length}
                 </p>
               </div>

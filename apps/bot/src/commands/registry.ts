@@ -1,7 +1,12 @@
 import { SlashCommandBuilder } from 'discord.js';
 import type { DatabaseAdapter } from '../../../../packages/database/src/adapter.ts';
-import { hasCapability, canActOnTargetRank, type PermissionCapability } from '../../../../packages/permissions/src/hierarchy.ts';
-import type { ClanRankName, GuildState } from '../../../../packages/shared/src/types.ts';
+import {
+  applySelfRoleSelection,
+  canActOnTargetRank,
+  hasCapability,
+  type PermissionCapability,
+} from '../../../../packages/permissions/src/hierarchy.ts';
+import type { ClanRankName, GuildState, ModerationActionType, RolePanel } from '../../../../packages/shared/src/types.ts';
 import { formatLocalizedString } from '../../../../packages/localization/src/engine.ts';
 
 export type CommandCategory =
@@ -22,6 +27,17 @@ export interface CommandDescriptor {
   optionsSummary: string[];
 }
 
+export interface DiscordCommandExecutor {
+  executeModeration?: (params: {
+    action: ModerationActionType;
+    targetUserId: string;
+    reason: string;
+    durationMinutes: number | null;
+    channelName: string;
+  }) => Promise<{ ok: boolean; error?: string }>;
+  publishRolePanel?: (panel: RolePanel) => Promise<{ ok: boolean; error?: string }>;
+}
+
 export interface CommandExecutionContext {
   guildId: string;
   actorUserId: string;
@@ -31,6 +47,7 @@ export interface CommandExecutionContext {
   channelName: string;
   args: Record<string, string | number | boolean>;
   db: DatabaseAdapter;
+  discordExecutor?: DiscordCommandExecutor;
 }
 
 export interface CommandExecutionResult {
@@ -217,32 +234,43 @@ export async function executeSlashCommand(
       }
       const actorMember = guild.members.find((m) => m.userId === ctx.actorUserId);
       if (actorMember) {
-        if (actorMember.languageCodes.includes(code)) {
-          actorMember.languageCodes = actorMember.languageCodes.filter((c) => c !== code);
+        if (guild.onboarding.allowMultipleLanguages) {
+          if (actorMember.languageCodes.includes(code)) {
+            actorMember.languageCodes = actorMember.languageCodes.filter((c) => c !== code);
+          } else {
+            actorMember.languageCodes.push(code);
+          }
         } else {
-          actorMember.languageCodes.push(code);
+          const applied = applySelfRoleSelection(actorMember, 'language', code);
+          actorMember.languageCodes = applied.languageCodes;
         }
         await ctx.db.saveGuild(guild);
       }
       return {
         ok: true,
         title: 'Language Role Updated',
-        message: `Toggled ${targetLang.flagEmoji} ${targetLang.nativeName} independently of your clan rank.`,
+        message: `Selected ${targetLang.flagEmoji} ${targetLang.nativeName} independently of your clan rank.`,
       };
     }
 
-    case 'setup':
+    case 'setup': {
+      const pending = guild.discovery.proposedChanges.filter(
+        (c) => c.status === 'proposed' || c.status === 'missing' || c.status === 'failed',
+      ).length;
+      const conflicts = guild.discovery.proposedChanges.filter((c) => c.status === 'conflicting').length;
       return {
         ok: true,
         title: 'Non-Destructive Discovery Preview',
-        message: `${guild.discovery.categories.length} existing categories & ${guild.discovery.roles.length} roles scanned. Pending additive items: ${guild.discovery.proposedChanges.filter((c) => !c.applied).length}. Use Dashboard -> Server Management to confirm.`,
+        message: `${guild.discovery.categories.length} categories & ${guild.discovery.roles.length} roles scanned. Pending additive items: ${pending}, conflicts requiring manual resolution: ${conflicts}.`,
       };
+    }
 
     case 'permissions':
       return {
         ok: true,
         title: 'Clan Rank Hierarchy',
-        message: 'Shadow King > Shadow Council > Warlord > Elite Warrior > ShadowSlayer > Recruit. Language roles carry zero moderation authority.',
+        message:
+          '👑 Shadow King > 🛡️ Shadow Council > ⚔️ Warlord > 🔥 Elite Warrior > 🖤 ShadowSlayer > 🌱 Recruit. Language, class, and notification roles carry zero moderation authority.',
       };
 
     case 'roles':
@@ -258,6 +286,18 @@ export async function executeSlashCommand(
       if (!panel) {
         return { ok: false, title: 'Panel Not Found', message: `Role panel "${panelId}" does not exist.` };
       }
+
+      if (ctx.discordExecutor?.publishRolePanel) {
+        const pubRes = await ctx.discordExecutor.publishRolePanel(panel);
+        if (!pubRes.ok) {
+          return {
+            ok: false,
+            title: 'Discord Publish Failed',
+            message: pubRes.error || `Failed to publish panel "${panel.title}" to #${panel.channelName}.`,
+          };
+        }
+      }
+
       panel.published = true;
       panel.publishedAt = now;
       await ctx.db.saveGuild(guild);
@@ -270,13 +310,19 @@ export async function executeSlashCommand(
         targetId: panel.id,
         targetName: panel.title,
         summary: `Published role panel "${panel.title}" to #${panel.channelName} (panel publish only; no server setup run).`,
-        details: { mode: panel.mode, itemsCount: panel.items.length },
+        details: {
+          mode: panel.mode,
+          itemsCount: panel.items.length,
+          liveDiscord: Boolean(ctx.discordExecutor?.publishRolePanel),
+        },
         createdAt: now,
       });
       return {
         ok: true,
         title: 'Role Panel Published',
-        message: `Published "${panel.title}" to #${panel.channelName} without altering any other server structure.`,
+        message: ctx.discordExecutor?.publishRolePanel
+          ? `Published "${panel.title}" live to #${panel.channelName} without altering any other server structure.`
+          : `Marked "${panel.title}" ready for #${panel.channelName} in database (live Discord gateway standby — will post once bot connects).`,
       };
     }
 
@@ -604,11 +650,31 @@ async function createModerationCase(
   reason: string,
 ): Promise<CommandExecutionResult> {
   const now = new Date().toISOString();
-  guild.caseSequence += 1;
-  const caseId = `CASE-${String(guild.caseSequence).padStart(4, '0')}`;
   const durationMinutes =
     action === 'timeout' || action === 'tempban' ? Math.max(1, Number(ctx.args.minutes || 60)) : null;
   const expiresAt = durationMinutes ? new Date(Date.now() + durationMinutes * 60_000).toISOString() : null;
+
+  let discordExecutionStatus: 'verified_live' | 'dry_run_no_bot' | 'failed' = 'dry_run_no_bot';
+  let discordError: string | null = null;
+
+  if (ctx.discordExecutor?.executeModeration) {
+    const execRes = await ctx.discordExecutor.executeModeration({
+      action,
+      targetUserId,
+      reason,
+      durationMinutes,
+      channelName: ctx.channelName,
+    });
+    if (execRes.ok) {
+      discordExecutionStatus = 'verified_live';
+    } else {
+      discordExecutionStatus = 'failed';
+      discordError = execRes.error || 'Discord API rejected moderation operation.';
+    }
+  }
+
+  guild.caseSequence += 1;
+  const caseId = `CASE-${String(guild.caseSequence).padStart(4, '0')}`;
 
   guild.moderationCases.unshift({
     caseId,
@@ -622,38 +688,42 @@ async function createModerationCase(
     reason,
     durationMinutes,
     expiresAt,
-    active: action !== 'untimeout' && action !== 'unban' && action !== 'unlock',
+    active: discordExecutionStatus !== 'failed' && action !== 'untimeout' && action !== 'unban' && action !== 'unlock',
     channelName: ctx.channelName,
+    discordExecutionStatus,
+    discordError,
     createdAt: now,
   });
 
-  if (action === 'warn') {
-    guild.warnings.unshift({
-      id: `warn-${Date.now()}`,
-      caseId,
-      userId: targetUserId,
-      username: targetUsername,
-      moderatorUsername: ctx.actorUsername,
-      reason,
-      active: true,
-      createdAt: now,
-    });
-  }
+  if (discordExecutionStatus !== 'failed') {
+    if (action === 'warn') {
+      guild.warnings.unshift({
+        id: `warn-${Date.now()}`,
+        caseId,
+        userId: targetUserId,
+        username: targetUsername,
+        moderatorUsername: ctx.actorUsername,
+        reason,
+        active: true,
+        createdAt: now,
+      });
+    }
 
-  if (action === 'tempban' && expiresAt) {
-    guild.scheduledTasks.push({
-      id: `task-tempban-${caseId}`,
-      guildId: guild.guildId,
-      type: 'tempban_expiry',
-      targetId: caseId,
-      description: `Expire tempban ${caseId} for ${targetUsername}`,
-      runAt: expiresAt,
-      status: 'pending',
-      attempts: 0,
-      lastError: null,
-      completedAt: null,
-      createdAt: now,
-    });
+    if (action === 'tempban' && expiresAt) {
+      guild.scheduledTasks.push({
+        id: `task-tempban-${caseId}`,
+        guildId: guild.guildId,
+        type: 'tempban_expiry',
+        targetId: caseId,
+        description: `Expire tempban ${caseId} for ${targetUsername}`,
+        runAt: expiresAt,
+        status: 'pending',
+        attempts: 0,
+        lastError: null,
+        completedAt: null,
+        createdAt: now,
+      });
+    }
   }
 
   await ctx.db.saveGuild(guild);
@@ -665,15 +735,30 @@ async function createModerationCase(
     actorName: ctx.actorUsername,
     targetId: targetUserId,
     targetName: targetUsername,
-    summary: `Executed ${action} (${caseId}) against ${targetUsername}: ${reason}`,
-    details: { caseId, action, durationMinutes },
+    summary:
+      discordExecutionStatus === 'failed'
+        ? `Failed ${action} (${caseId}) against ${targetUsername}: ${discordError}`
+        : `Executed ${action} (${caseId}, ${discordExecutionStatus}) against ${targetUsername}: ${reason}`,
+    details: { caseId, action, durationMinutes, discordExecutionStatus, discordError },
     createdAt: now,
   });
+
+  if (discordExecutionStatus === 'failed') {
+    return {
+      ok: false,
+      title: `${caseId} Discord Execution Failed`,
+      message: `Discord rejected "${action}" against ${targetUsername}: ${discordError}`,
+      data: { caseId, discordExecutionStatus, discordError },
+    };
+  }
 
   return {
     ok: true,
     title: `${caseId} Recorded`,
-    message: `Action "${action}" logged against ${targetUsername}.`,
-    data: { caseId },
+    message:
+      discordExecutionStatus === 'verified_live'
+        ? `Action "${action}" executed live on Discord and logged against ${targetUsername}.`
+        : `Action "${action}" logged in standby mode (live Discord Gateway offline) against ${targetUsername}.`,
+    data: { caseId, discordExecutionStatus },
   };
 }

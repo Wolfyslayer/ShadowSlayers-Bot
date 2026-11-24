@@ -267,13 +267,14 @@ export default function App() {
                     await apiRequest(`/api/guild/${guildId}/discovery/rescan`, { method: 'POST', token });
                     await refreshState();
                   }}
-                  onConfirmSetup={async () => {
-                    await apiRequest(`/api/guild/${guildId}/discovery/confirm`, {
+                  onConfirmSetup={async (mode) => {
+                    const res = await apiRequest<{ executionMode?: string }>(`/api/guild/${guildId}/discovery/confirm`, {
                       method: 'POST',
                       token,
-                      body: { confirmed: true },
+                      body: { confirmed: true, mode },
                     });
                     await refreshState();
+                    return res;
                   }}
                 />
               )}

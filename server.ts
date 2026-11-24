@@ -18,7 +18,8 @@ import {
   mergeIndependentLanguageRoles,
   type PermissionCapability,
 } from './packages/permissions/src/hierarchy.ts';
-import type { AuthUserSession, ClanRankName, LogCategory } from './packages/shared/src/types.ts';
+import { resolveAuthorizedDiscordOAuthSession } from './packages/permissions/src/oauth-authz.ts';
+import type { AuthUserSession, LogCategory } from './packages/shared/src/types.ts';
 import {
   appealReviewSchema,
   automodUpdateSchema,
@@ -116,15 +117,11 @@ async function bootstrap() {
   app.set('trust proxy', 1);
   app.use(express.json({ limit: '1mb' }));
 
-  // Origin-checked CORS (never wildcard * on authenticated routes)
+  // Explicit origin-checked CORS (never wildcard * or overly broad domain suffixes)
   app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    const allowedOrigins = new Set<string>([
-      env.appUrl,
-      'http://localhost:3000',
-      'http://127.0.0.1:3000',
-    ]);
-    if (origin && (allowedOrigins.has(origin) || origin.endsWith('.github.io') || origin.endsWith('.run.app'))) {
+    const origin = req.headers.origin?.replace(/\/+$/, '');
+    const allowedOrigins = new Set<string>(env.allowedOrigins);
+    if (origin && allowedOrigins.has(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
@@ -204,7 +201,7 @@ async function bootstrap() {
       discordOAuthConfigured,
       envPasscodeConfigured,
       adminClaimed: Boolean(adminAuth) || envPasscodeConfigured,
-      claimedUsername: adminAuth?.username ?? (envPasscodeConfigured ? 'Shadow King' : null),
+      claimedUsername: adminAuth?.username ?? (envPasscodeConfigured ? '👑 Shadow King' : null),
     });
   });
 
@@ -245,8 +242,10 @@ async function bootstrap() {
       username,
       avatarUrl: '/src/assets/images/avatar_shadow_king_1795519524578.jpg',
       provider: 'admin_passcode',
-      clanRank: 'Shadow King',
-      permissions: getCapabilitiesForRank('Shadow King'),
+      clanRank: '👑 Shadow King',
+      guildVerified: true,
+      discordRoleIds: [],
+      permissions: getCapabilitiesForRank('👑 Shadow King'),
       expiresAt: new Date(Date.now() + 12 * 3600_000).toISOString(),
     };
 
@@ -263,7 +262,7 @@ async function bootstrap() {
     }
 
     let valid = false;
-    let username = 'Shadow King';
+    let username = '👑 Shadow King';
 
     if (env.adminPasscode.trim().length > 0) {
       const a = Buffer.from(password);
@@ -289,8 +288,10 @@ async function bootstrap() {
       username,
       avatarUrl: '/src/assets/images/avatar_shadow_king_1795519524578.jpg',
       provider: 'admin_passcode',
-      clanRank: 'Shadow King',
-      permissions: getCapabilitiesForRank('Shadow King'),
+      clanRank: '👑 Shadow King',
+      guildVerified: true,
+      discordRoleIds: [],
+      permissions: getCapabilitiesForRank('👑 Shadow King'),
       expiresAt: new Date(Date.now() + 12 * 3600_000).toISOString(),
     };
 
@@ -323,7 +324,10 @@ async function bootstrap() {
     const code = typeof req.query.code === 'string' ? req.query.code : '';
     const state = typeof req.query.state === 'string' ? req.query.state : '';
 
-    if (!code || !state || !oauthStates.has(state)) {
+    const stateEntry = state ? oauthStates.get(state) : undefined;
+    const stateExpired = !stateEntry || Date.now() - stateEntry.createdAt > 5 * 60_000;
+    if (!code || !state || stateExpired) {
+      if (state) oauthStates.delete(state);
       res.status(400).send('Invalid or expired OAuth state.');
       return;
     }
@@ -333,6 +337,8 @@ async function bootstrap() {
       res.status(500).send('Discord OAuth2 credentials missing on server.');
       return;
     }
+
+    const targetOrigin = JSON.stringify(env.appUrl);
 
     try {
       const tokenResp = await fetch('https://discord.com/api/oauth2/token', {
@@ -351,36 +357,67 @@ async function bootstrap() {
         return;
       }
       const tokenJson = (await tokenResp.json()) as { access_token: string };
-      const userResp = await fetch('https://discord.com/api/users/@me', {
-        headers: { Authorization: `Bearer ${tokenJson.access_token}` },
-      });
-      if (!userResp.ok) {
-        res.status(502).send('Failed to fetch Discord user profile.');
+      const [userResp, guildsResp] = await Promise.all([
+        fetch('https://discord.com/api/users/@me', {
+          headers: { Authorization: `Bearer ${tokenJson.access_token}` },
+        }),
+        fetch('https://discord.com/api/users/@me/guilds', {
+          headers: { Authorization: `Bearer ${tokenJson.access_token}` },
+        }),
+      ]);
+      if (!userResp.ok || !guildsResp.ok) {
+        res.status(502).send('Failed to fetch Discord user profile or guild memberships.');
         return;
       }
+
       const discordUser = (await userResp.json()) as { id: string; username: string; avatar: string | null };
+      const userGuilds = (await guildsResp.json()) as Array<{ id: string }>;
+      const userGuildIds = userGuilds.map((g) => g.id);
+
+      // Fetch live guild member roles via Bot token whenever configured
+      let liveMemberRoleIds: string[] | null = null;
+      if (env.discordBotToken && env.discordGuildId && env.discordGuildId !== 'shadowslayers-primary') {
+        const memberResp = await fetch(
+          `https://discord.com/api/v10/guilds/${env.discordGuildId}/members/${discordUser.id}`,
+          { headers: { Authorization: `Bot ${env.discordBotToken}` } },
+        );
+        if (memberResp.ok) {
+          const memberJson = (await memberResp.json()) as { roles?: string[] };
+          liveMemberRoleIds = Array.isArray(memberJson.roles) ? memberJson.roles : [];
+        } else if (memberResp.status === 404) {
+          liveMemberRoleIds = null;
+        }
+      }
 
       const guild = await db.getGuild(env.discordGuildId);
-      const matchedMember = guild?.members.find((m) => m.userId === discordUser.id);
-      const clanRank: ClanRankName = matchedMember?.clanRank ?? 'Shadow Council';
+      const authz = resolveAuthorizedDiscordOAuthSession({
+        discordUser,
+        userGuildIds,
+        targetGuildId: env.discordGuildId,
+        liveMemberRoleIds,
+        guildState: guild,
+        explicitAuthorizedUserIds: env.adminDiscordUserIds,
+      });
 
-      const session: AuthUserSession = {
-        userId: discordUser.id,
-        username: discordUser.username,
-        avatarUrl: discordUser.avatar
-          ? `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png`
-          : null,
-        provider: 'discord_oauth',
-        clanRank,
-        permissions: getCapabilitiesForRank(clanRank),
-        expiresAt: new Date(Date.now() + 12 * 3600_000).toISOString(),
-      };
-      const sessionToken = signSessionToken(session);
+      if (!authz.authorized || !authz.session) {
+        res.status(403).send(`<!doctype html><html><body style="background:#0B0D12;color:#fca5a5;font-family:sans-serif;padding:24px;">
+          <script>
+            if (window.opener) {
+              window.opener.postMessage({ type: 'OAUTH_AUTH_ERROR', error: ${JSON.stringify(authz.reason)} }, ${targetOrigin});
+              window.close();
+            }
+          </script>
+          <h3>Access Denied (403)</h3>
+          <p>${authz.reason}</p>
+        </body></html>`);
+        return;
+      }
 
+      const sessionToken = signSessionToken(authz.session);
       res.send(`<!doctype html><html><body style="background:#0B0D12;color:#f8fafc;font-family:sans-serif;padding:24px;">
         <script>
           if (window.opener) {
-            window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS', token: ${JSON.stringify(sessionToken)} }, '*');
+            window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS', token: ${JSON.stringify(sessionToken)} }, ${targetOrigin});
             window.close();
           } else {
             window.location.href = '/';
@@ -431,7 +468,12 @@ async function bootstrap() {
       res.status(404).json({ error: 'Guild not found' });
       return;
     }
-    guild.discovery.lastDiscoveredAt = new Date().toISOString();
+    const liveRescanned = await botClient.rescanLiveGuild(guild.discovery);
+    if (liveRescanned) {
+      guild.discovery = liveRescanned;
+    } else {
+      guild.discovery.lastDiscoveredAt = new Date().toISOString();
+    }
     await db.saveGuild(guild);
     await recordDashboardAudit(
       guild.guildId,
@@ -439,9 +481,9 @@ async function bootstrap() {
       'config_change',
       guild.guildId,
       guild.guildName,
-      `Ran non-destructive server discovery (${guild.discovery.categories.length} categories, ${guild.discovery.roles.length} roles).`,
+      `Ran non-destructive server discovery (${guild.discovery.categories.length} categories, ${guild.discovery.roles.length} roles, liveDiscord=${Boolean(liveRescanned)}).`,
     );
-    res.json({ discovery: guild.discovery });
+    res.json({ discovery: guild.discovery, liveDiscord: Boolean(liveRescanned) });
   });
 
   app.post('/api/guild/:guildId/discovery/confirm', requireAuth('discovery.apply'), async (req: AuthenticatedRequest, res) => {
@@ -455,14 +497,41 @@ async function bootstrap() {
       return;
     }
 
+    const mode = req.body?.mode === 'full_setup' ? 'full_setup' : 'missing_only';
+    const liveReport = await botClient.applySetupOnLiveGuild(guild.discovery, {
+      mode,
+      actorUsername: req.sessionUser!.username,
+    });
+
+    if (liveReport) {
+      guild.discovery = liveReport.snapshot;
+      await db.saveGuild(guild);
+      await recordDashboardAudit(
+        guild.guildId,
+        req.sessionUser!,
+        'config_change',
+        guild.guildId,
+        guild.guildName,
+        `Executed live additive setup (${mode}): ${liveReport.appliedCount} applied, ${liveReport.failedCount} failed, ${liveReport.skippedConflicts} conflicts skipped.`,
+      );
+      res.json({
+        discovery: guild.discovery,
+        executionMode: 'live_discord',
+        report: {
+          appliedCount: liveReport.appliedCount,
+          failedCount: liveReport.failedCount,
+          skippedConflicts: liveReport.skippedConflicts,
+          failures: liveReport.failures,
+        },
+      });
+      return;
+    }
+
+    // No live Discord Gateway connected: mark confirmed ONLY (never falsely mark 'applied')
     const now = new Date().toISOString();
     for (const change of guild.discovery.proposedChanges) {
-      if (!change.applied) {
-        change.applied = true;
-        if (change.kind === 'create_role' && change.targetName === '✅ Verified') {
-          const role = guild.discovery.roles.find((r) => r.name === '✅ Verified');
-          if (role) role.mapped = true;
-        }
+      if (change.status === 'proposed' || change.status === 'missing') {
+        change.status = 'confirmed';
       }
     }
     guild.discovery.setupConfirmedBy = req.sessionUser!.username;
@@ -474,9 +543,9 @@ async function bootstrap() {
       'config_change',
       guild.guildId,
       guild.guildName,
-      'Confirmed additive non-destructive server setup mapping.',
+      'Confirmed additive setup plan in standby mode (Discord Gateway offline — no live server changes applied yet).',
     );
-    res.json({ discovery: guild.discovery });
+    res.json({ discovery: guild.discovery, executionMode: 'confirmed_awaiting_gateway' });
   });
 
   // Dynamic Language Management (Zero AI)
@@ -510,14 +579,18 @@ async function bootstrap() {
         id: `role-lang-${code}`,
         discordRoleId: null,
         name: config.roleName,
+        aliases: [config.name, config.nativeName],
         category: 'language',
         rankOrder: 0,
+        position: 0,
+        permissionsBitfield: '0',
         colorHex: '#0EA5E9',
         selfAssignable: true,
-        exclusiveGroupId: null,
+        exclusiveGroupId: guild.onboarding.allowMultipleLanguages ? null : 'language_exclusive',
         discoveredFromExisting: false,
-        mapped: true,
+        mapped: false,
         mentionable: false,
+        lifecycleState: 'proposed',
       });
     }
 
@@ -653,6 +726,8 @@ async function bootstrap() {
         position: guild.discovery.categories.length + 1,
         isPrivateLeadership: false,
         discoveredFromExisting: false,
+        lifecycleState: 'confirmed',
+        permissionOverwrites: [],
         channels: [],
       };
       guild.discovery.categories.push(existingCategory);
@@ -669,10 +744,15 @@ async function bootstrap() {
           name: ch.name,
           type: ch.type,
           categoryId: existingCategory.id,
+          topic: `${lang.nativeName} ${ch.key} channel`,
           isPrivateLeadership: false,
+          accessClassification: 'verified_member',
           languageCode: code,
           mappedRolePurpose: ch.key,
           discoveredFromExisting: false,
+          required: false,
+          permissionOverwrites: [],
+          lifecycleState: 'confirmed',
         });
         created.push({ key: ch.key, name: ch.name, channelId: newChId });
       } else {
@@ -760,6 +840,7 @@ async function bootstrap() {
       member.languageCodes = mergeIndependentLanguageRoles(member.languageCodes, parsed.data.languageCodes, enabledCodes);
     }
     if (parsed.data.gamingClasses !== undefined) member.gamingClasses = parsed.data.gamingClasses;
+    if (parsed.data.notificationRoles !== undefined) member.notificationRoles = parsed.data.notificationRoles;
     if (parsed.data.verified !== undefined) member.verified = parsed.data.verified;
     if (parsed.data.customBio !== undefined) member.customBio = parsed.data.customBio;
 
@@ -813,6 +894,16 @@ async function bootstrap() {
       res.status(404).json({ error: 'Role panel not found' });
       return;
     }
+
+    const liveGuild = botClient.getLiveDiscordGuild();
+    if (liveGuild) {
+      const pubRes = await botClient.publishRolePanelToDiscord(liveGuild, panel);
+      if (!pubRes.ok) {
+        res.status(502).json({ error: pubRes.error || 'Discord failed to publish role panel.' });
+        return;
+      }
+    }
+
     panel.published = true;
     panel.publishedAt = new Date().toISOString();
     await db.saveGuild(guild);
@@ -822,9 +913,9 @@ async function bootstrap() {
       'role_change',
       panel.id,
       panel.title,
-      `Executed /roles publish for "${panel.title}" in #${panel.channelName} (panel only; zero server setup changes).`,
+      `Executed /roles publish for "${panel.title}" in #${panel.channelName} (liveDiscord=${Boolean(liveGuild)}; zero server setup changes).`,
     );
-    res.json({ panel });
+    res.json({ panel, liveDiscord: Boolean(liveGuild) });
   });
 
   // Moderation & Appeals
@@ -846,10 +937,31 @@ async function bootstrap() {
     }
 
     const now = new Date().toISOString();
-    guild.caseSequence += 1;
-    const caseId = `CASE-${String(guild.caseSequence).padStart(4, '0')}`;
     const durationMinutes = parsed.data.durationMinutes ?? null;
     const expiresAt = durationMinutes ? new Date(Date.now() + durationMinutes * 60_000).toISOString() : null;
+
+    let discordExecutionStatus: 'verified_live' | 'dry_run_no_bot' | 'failed' = 'dry_run_no_bot';
+    let discordError: string | null = null;
+
+    const liveGuild = botClient.getLiveDiscordGuild();
+    if (liveGuild) {
+      const execRes = await botClient.executeLiveModeration(liveGuild, {
+        action: parsed.data.action,
+        targetUserId: parsed.data.targetUserId,
+        reason: parsed.data.reason,
+        durationMinutes,
+        channelName: parsed.data.channelName ?? 'common-hall',
+      });
+      if (execRes.ok) {
+        discordExecutionStatus = 'verified_live';
+      } else {
+        discordExecutionStatus = 'failed';
+        discordError = execRes.error || 'Discord API rejected moderation operation.';
+      }
+    }
+
+    guild.caseSequence += 1;
+    const caseId = `CASE-${String(guild.caseSequence).padStart(4, '0')}`;
 
     const modCase = {
       caseId,
@@ -863,39 +975,43 @@ async function bootstrap() {
       reason: parsed.data.reason,
       durationMinutes,
       expiresAt,
-      active: !['untimeout', 'unban', 'unlock'].includes(parsed.data.action),
+      active: discordExecutionStatus !== 'failed' && !['untimeout', 'unban', 'unlock'].includes(parsed.data.action),
       channelName: parsed.data.channelName ?? null,
+      discordExecutionStatus,
+      discordError,
       createdAt: now,
     };
     guild.moderationCases.unshift(modCase);
 
-    if (parsed.data.action === 'warn') {
-      guild.warnings.unshift({
-        id: `warn-${Date.now()}`,
-        caseId,
-        userId: parsed.data.targetUserId,
-        username: parsed.data.targetUsername,
-        moderatorUsername: req.sessionUser!.username,
-        reason: parsed.data.reason,
-        active: true,
-        createdAt: now,
-      });
-    }
+    if (discordExecutionStatus !== 'failed') {
+      if (parsed.data.action === 'warn') {
+        guild.warnings.unshift({
+          id: `warn-${Date.now()}`,
+          caseId,
+          userId: parsed.data.targetUserId,
+          username: parsed.data.targetUsername,
+          moderatorUsername: req.sessionUser!.username,
+          reason: parsed.data.reason,
+          active: true,
+          createdAt: now,
+        });
+      }
 
-    if (parsed.data.action === 'tempban' && expiresAt) {
-      guild.scheduledTasks.push({
-        id: `task-tempban-${caseId}`,
-        guildId: guild.guildId,
-        type: 'tempban_expiry',
-        targetId: caseId,
-        description: `Auto-expire tempban ${caseId} for ${parsed.data.targetUsername}`,
-        runAt: expiresAt,
-        status: 'pending',
-        attempts: 0,
-        lastError: null,
-        completedAt: null,
-        createdAt: now,
-      });
+      if (parsed.data.action === 'tempban' && expiresAt) {
+        guild.scheduledTasks.push({
+          id: `task-tempban-${caseId}`,
+          guildId: guild.guildId,
+          type: 'tempban_expiry',
+          targetId: caseId,
+          description: `Auto-expire tempban ${caseId} for ${parsed.data.targetUsername}`,
+          runAt: expiresAt,
+          status: 'pending',
+          attempts: 0,
+          lastError: null,
+          completedAt: null,
+          createdAt: now,
+        });
+      }
     }
 
     await db.saveGuild(guild);
@@ -905,8 +1021,15 @@ async function bootstrap() {
       'moderation',
       parsed.data.targetUserId,
       parsed.data.targetUsername,
-      `${caseId}: ${parsed.data.action} on ${parsed.data.targetUsername} — ${parsed.data.reason}`,
+      discordExecutionStatus === 'failed'
+        ? `${caseId}: FAILED ${parsed.data.action} on ${parsed.data.targetUsername} — ${discordError}`
+        : `${caseId} (${discordExecutionStatus}): ${parsed.data.action} on ${parsed.data.targetUsername} — ${parsed.data.reason}`,
     );
+
+    if (discordExecutionStatus === 'failed') {
+      res.status(502).json({ error: discordError, modCase });
+      return;
+    }
     res.status(201).json({ modCase });
   });
 
@@ -980,7 +1103,7 @@ async function bootstrap() {
       username: String(req.body?.username || 'TestRecruit'),
       content: String(req.body?.content || ''),
       channelName: String(req.body?.channelName || 'common-hall'),
-      userRoles: Array.isArray(req.body?.userRoles) ? req.body.userRoles : ['Recruit'],
+      userRoles: Array.isArray(req.body?.userRoles) ? req.body.userRoles : ['🌱 Recruit'],
       mentionCount: Number(req.body?.mentionCount || 0),
     });
     res.json({ evaluation });
@@ -1529,6 +1652,7 @@ async function bootstrap() {
       res.status(400).json({ error: 'Invalid command payload' });
       return;
     }
+    const liveGuild = botClient.getLiveDiscordGuild();
     const result = await executeSlashCommand(parsed.data.command, {
       guildId: req.params.guildId,
       actorUserId: req.sessionUser!.userId,
@@ -1538,6 +1662,7 @@ async function bootstrap() {
       channelName: parsed.data.channelName,
       args: parsed.data.args,
       db,
+      discordExecutor: liveGuild ? botClient.buildDiscordExecutor(liveGuild) : undefined,
     });
     res.json({ result });
   });

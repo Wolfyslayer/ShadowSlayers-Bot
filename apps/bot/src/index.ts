@@ -1,10 +1,40 @@
-import { Client, Events, GatewayIntentBits, REST, Routes } from 'discord.js';
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ChannelType,
+  Client,
+  Events,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  type Guild,
+  type GuildMember,
+} from 'discord.js';
 import type { DatabaseAdapter } from '../../../packages/database/src/adapter.ts';
-import type { ClanRankName } from '../../../packages/shared/src/types.ts';
-import { CLAN_RANK_ORDER } from '../../../packages/shared/src/types.ts';
-import { buildDiscordSlashCommandsJson, executeSlashCommand } from './commands/registry.ts';
+import {
+  applySelfRoleSelection,
+  canBotManageRolePosition,
+  canBotModerateMemberPosition,
+} from '../../../packages/permissions/src/hierarchy.ts';
+import {
+  CLAN_RANK_ORDER,
+  type ClanRankName,
+  type ModerationActionType,
+  type RolePanel,
+  type ServerDiscoverySnapshot,
+} from '../../../packages/shared/src/types.ts';
+import { LEGACY_ROLE_SPECS } from '../../../packages/shared/src/legacy-template.ts';
+import { buildDiscordSlashCommandsJson, executeSlashCommand, type DiscordCommandExecutor } from './commands/registry.ts';
+import { dispatchLiveSetupButton, handleLiveSlashSetup } from './commands/setup.ts';
 import { RuleBasedAutoModEngine } from './services/automod.ts';
-import { discoverLiveDiscordGuild } from './services/discovery.ts';
+import {
+  discoverLiveDiscordGuild,
+  executeAdditiveSetupOnDiscordGuild,
+  resolveRoleMatch,
+  type GuildLike,
+  type SetupExecutionReport,
+} from './services/discovery.ts';
 import { evaluateXpAward, hashMessageContent } from './services/xp.ts';
 
 export interface BotRuntimeStatus {
@@ -14,6 +44,17 @@ export interface BotRuntimeStatus {
   guildCount: number;
   lastError: string | null;
   startedAt: string | null;
+}
+
+function resolveMemberClanRank(memberRoles: string[]): ClanRankName {
+  for (const rank of CLAN_RANK_ORDER) {
+    const spec = LEGACY_ROLE_SPECS.find((r) => r.name === rank);
+    const aliases = spec ? [rank, ...spec.aliases] : [rank];
+    if (memberRoles.some((mr) => aliases.some((a) => a.toLowerCase() === mr.trim().toLowerCase()))) {
+      return rank;
+    }
+  }
+  return '🌱 Recruit';
 }
 
 export class ShadowSlayersBotClient {
@@ -37,6 +78,269 @@ export class ShadowSlayersBotClient {
 
   getStatus(): BotRuntimeStatus {
     return { ...this.status };
+  }
+
+  getLiveDiscordGuild(): Guild | null {
+    if (!this.client || !this.status.connected) return null;
+    return this.client.guilds.cache.get(this.guildId) ?? this.client.guilds.cache.first() ?? null;
+  }
+
+  async rescanLiveGuild(existing: ServerDiscoverySnapshot): Promise<ServerDiscoverySnapshot | null> {
+    const liveGuild = this.getLiveDiscordGuild();
+    if (!liveGuild) return null;
+    await liveGuild.roles.fetch();
+    await liveGuild.channels.fetch();
+    return discoverLiveDiscordGuild(liveGuild as unknown as GuildLike, existing);
+  }
+
+  async applySetupOnLiveGuild(
+    existing: ServerDiscoverySnapshot,
+    options: { mode: 'missing_only' | 'full_setup'; actorUsername: string },
+  ): Promise<SetupExecutionReport | null> {
+    const liveGuild = this.getLiveDiscordGuild();
+    if (!liveGuild) return null;
+    return executeAdditiveSetupOnDiscordGuild(liveGuild as unknown as GuildLike, existing, options);
+  }
+
+  buildDiscordExecutor(liveGuild: Guild): DiscordCommandExecutor {
+    return {
+      executeModeration: async ({ action, targetUserId, reason, durationMinutes, channelName }) => {
+        return this.executeLiveModeration(liveGuild, { action, targetUserId, reason, durationMinutes, channelName });
+      },
+      publishRolePanel: async (panel) => {
+        return this.publishRolePanelToDiscord(liveGuild, panel);
+      },
+    };
+  }
+
+  async executeLiveModeration(
+    liveGuild: Guild,
+    params: {
+      action: ModerationActionType;
+      targetUserId: string;
+      reason: string;
+      durationMinutes: number | null;
+      channelName: string;
+    },
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const botMember = liveGuild.members.me ?? (await liveGuild.members.fetchMe());
+      const botHighest = botMember.roles.highest.position;
+
+      if (params.action === 'unban') {
+        await liveGuild.members.unban(params.targetUserId, params.reason);
+        return { ok: true };
+      }
+
+      if (params.action === 'slowmode' || params.action === 'lock' || params.action === 'unlock' || params.action === 'purge') {
+        const ch = liveGuild.channels.cache.find((c) => c.name === params.channelName && c.isTextBased());
+        if (!ch || !('permissionOverwrites' in ch)) {
+          return { ok: false, error: `Text channel #${params.channelName} not found on Discord.` };
+        }
+        if (params.action === 'lock') {
+          await ch.permissionOverwrites.edit(liveGuild.id, { SendMessages: false }, { reason: params.reason });
+        } else if (params.action === 'unlock') {
+          await ch.permissionOverwrites.edit(liveGuild.id, { SendMessages: null }, { reason: params.reason });
+        } else if (params.action === 'slowmode' && 'setRateLimitPerUser' in ch) {
+          await ch.setRateLimitPerUser(params.durationMinutes ?? 10, params.reason);
+        } else if (params.action === 'purge' && 'bulkDelete' in ch) {
+          await ch.bulkDelete(Math.min(100, Math.max(1, params.durationMinutes ?? 10)), true);
+        }
+        return { ok: true };
+      }
+
+      const targetMember = await liveGuild.members.fetch(params.targetUserId).catch(() => null);
+      if (targetMember && !canBotModerateMemberPosition(botHighest, targetMember.roles.highest.position)) {
+        return {
+          ok: false,
+          error: `Bot role position (${botHighest}) is not above target member's highest role (${targetMember.roles.highest.position}).`,
+        };
+      }
+
+      if (params.action === 'warn') {
+        return { ok: true };
+      }
+      if (params.action === 'timeout') {
+        if (!targetMember) return { ok: false, error: 'Target member is not currently in the guild.' };
+        const ms = Math.min(28 * 86400_000, Math.max(60_000, (params.durationMinutes ?? 60) * 60_000));
+        await targetMember.timeout(ms, params.reason);
+        return { ok: true };
+      }
+      if (params.action === 'untimeout') {
+        if (!targetMember) return { ok: false, error: 'Target member is not currently in the guild.' };
+        await targetMember.timeout(null, params.reason);
+        return { ok: true };
+      }
+      if (params.action === 'kick') {
+        if (!targetMember) return { ok: false, error: 'Target member is not currently in the guild.' };
+        await targetMember.kick(params.reason);
+        return { ok: true };
+      }
+      if (params.action === 'ban' || params.action === 'tempban') {
+        await liveGuild.members.ban(params.targetUserId, { reason: params.reason });
+        return { ok: true };
+      }
+      return { ok: false, error: `Unsupported live moderation action: ${params.action}` };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  async publishRolePanelToDiscord(liveGuild: Guild, panel: RolePanel): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const targetChannel = liveGuild.channels.cache.find(
+        (c) => c.name === panel.channelName && (c.type === ChannelType.GuildText || c.type === ChannelType.GuildAnnouncement),
+      );
+      if (!targetChannel || !targetChannel.isTextBased() || !('send' in targetChannel)) {
+        return { ok: false, error: `Target channel #${panel.channelName} was not found on Discord.` };
+      }
+
+      const row = new ActionRowBuilder<ButtonBuilder>();
+      for (const item of panel.items.slice(0, 5)) {
+        row.addComponents(
+          new ButtonBuilder()
+            .setCustomId(`rolepanel:${panel.id}:${item.roleId}`)
+            .setLabel(item.label)
+            .setStyle(panel.groupType === 'exclusive' ? ButtonStyle.Primary : ButtonStyle.Secondary),
+        );
+      }
+
+      await targetChannel.send({
+        content: `**${panel.title}**\n${panel.description}\n_Mode: ${panel.groupType === 'exclusive' ? 'Exclusive (one active role)' : 'Multiple selections allowed'}_`,
+        components: row.components.length > 0 ? [row] : [],
+      });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  private async handleRolePanelButton(
+    customId: string,
+    member: GuildMember,
+    liveGuild: Guild,
+  ): Promise<{ ok: boolean; message: string }> {
+    const [, panelId, itemRoleKey] = customId.split(':');
+    const guildState = await this.db.getGuild(this.guildId);
+    if (!guildState) return { ok: false, message: 'Guild configuration missing.' };
+
+    const panel = guildState.rolePanels.find((p) => p.id === panelId);
+    if (!panel) return { ok: false, message: 'Role panel not found.' };
+
+    const item = panel.items.find((i) => i.roleId === itemRoleKey);
+    if (!item) return { ok: false, message: 'Role option not found on panel.' };
+
+    if (panel.category === 'clan_rank') {
+      return {
+        ok: false,
+        message: 'Clan hierarchy ranks cannot be self-assigned. Only Shadow King / Shadow Council / Warlord can assign clan ranks.',
+      };
+    }
+
+    const botHighest = liveGuild.members.me?.roles.highest.position ?? 0;
+    const allRoles = [...liveGuild.roles.cache.values()];
+    const roleSpec = LEGACY_ROLE_SPECS.find((s) => s.key === item.roleId || s.name === item.label);
+    const resolved = resolveRoleMatch(
+      { name: item.label, aliases: roleSpec?.aliases ?? [] },
+      allRoles,
+    );
+
+    if (resolved.status === 'conflicting') {
+      return {
+        ok: false,
+        message: `Ambiguous role candidates found for "${item.label}". Administrator conflict resolution required.`,
+      };
+    }
+    if (!resolved.matched) {
+      return { ok: false, message: `Discord role "${item.label}" does not exist yet on this server.` };
+    }
+    if (!canBotManageRolePosition(botHighest, resolved.matched.position)) {
+      return {
+        ok: false,
+        message: `Bot role hierarchy is too low to manage "${resolved.matched.name}".`,
+      };
+    }
+
+    // Track in DB + apply exclusive/multiple logic
+    let memberRec = guildState.members.find((m) => m.userId === member.id);
+    if (!memberRec) {
+      memberRec = {
+        userId: member.id,
+        username: member.user.username,
+        displayName: member.displayName,
+        avatarUrl: member.displayAvatarURL(),
+        clanRank: resolveMemberClanRank([...member.roles.cache.values()].map((r) => r.name)),
+        languageCodes: [],
+        gamingClasses: [],
+        notificationRoles: [],
+        verified: member.roles.cache.some((r) => r.name === '✅ Verified'),
+        xp: 0,
+        level: 1,
+        messagesCount: 0,
+        voiceMinutes: 0,
+        achievements: [],
+        customBio: '',
+        lastXpAt: null,
+        lastMessageHash: null,
+        joinedAt: member.joinedAt?.toISOString() ?? new Date().toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        isDeparted: false,
+        deletedAt: null,
+      };
+      guildState.members.push(memberRec);
+    }
+
+    const groupKind =
+      panel.category === 'language' ? 'language' : panel.category === 'class' ? 'class' : 'notification';
+    const valueForDb =
+      groupKind === 'language'
+        ? item.roleId.replace(/^lang_/, '')
+        : item.label;
+
+    const sel = applySelfRoleSelection(memberRec, groupKind, valueForDb);
+    if (!sel.allowed) {
+      return { ok: false, message: sel.reason || 'Role selection denied.' };
+    }
+
+    // Enforce Discord role changes
+    if (panel.groupType === 'exclusive') {
+      for (const sibling of panel.items) {
+        if (sibling.roleId === item.roleId) continue;
+        const sibSpec = LEGACY_ROLE_SPECS.find((s) => s.key === sibling.roleId || s.name === sibling.label);
+        const sibResolved = resolveRoleMatch({ name: sibling.label, aliases: sibSpec?.aliases ?? [] }, allRoles);
+        if (sibResolved.matched && member.roles.cache.has(sibResolved.matched.id)) {
+          await member.roles.remove(sibResolved.matched.id, `Exclusive role switch in ${panel.title}`);
+        }
+      }
+      if (!member.roles.cache.has(resolved.matched.id)) {
+        await member.roles.add(resolved.matched.id, `Selected in ${panel.title}`);
+      }
+    } else {
+      if (member.roles.cache.has(resolved.matched.id)) {
+        await member.roles.remove(resolved.matched.id, `Toggled off in ${panel.title}`);
+      } else {
+        await member.roles.add(resolved.matched.id, `Toggled on in ${panel.title}`);
+      }
+    }
+
+    memberRec.languageCodes = sel.languageCodes;
+    memberRec.gamingClasses = sel.gamingClasses;
+    memberRec.notificationRoles = sel.notificationRoles;
+    await this.db.saveGuild(guildState);
+    await this.db.appendAuditLog(this.guildId, {
+      id: `log-selfrole-${Date.now()}`,
+      guildId: this.guildId,
+      category: 'role_change',
+      actorId: member.id,
+      actorName: member.user.username,
+      targetId: resolved.matched.id,
+      targetName: resolved.matched.name,
+      summary: `${member.user.username} updated ${panel.category} role (${resolved.matched.name}) via ${panel.title}; clan rank (${memberRec.clanRank}) unchanged.`,
+      details: { panelId: panel.id, groupType: panel.groupType },
+      createdAt: new Date().toISOString(),
+    });
+
+    return { ok: true, message: `Updated **${resolved.matched.name}** (clan rank **${memberRec.clanRank}** unchanged).` };
   }
 
   async start(botToken: string, clientId: string): Promise<void> {
@@ -72,11 +376,11 @@ export class ShadowSlayersBotClient {
           });
         }
 
-        const primaryDiscordGuild = readyClient.guilds.cache.first();
+        const primaryDiscordGuild = this.getLiveDiscordGuild();
         if (primaryDiscordGuild) {
           const guild = await this.db.getGuild(this.guildId);
           if (guild) {
-            guild.discovery = discoverLiveDiscordGuild(primaryDiscordGuild, guild.discovery);
+            guild.discovery = discoverLiveDiscordGuild(primaryDiscordGuild as unknown as GuildLike, guild.discovery);
             await this.db.saveGuild(guild);
           }
         }
@@ -102,15 +406,53 @@ export class ShadowSlayersBotClient {
     });
 
     this.client.on(Events.InteractionCreate, async (interaction) => {
+      const liveGuild = interaction.guild ?? this.getLiveDiscordGuild();
+      const memberRoles =
+        interaction.member && 'roles' in interaction.member && 'cache' in interaction.member.roles
+          ? [...interaction.member.roles.cache.values()].map((r) => r.name)
+          : [];
+      const actorRank = resolveMemberClanRank(memberRoles);
+
+      if (interaction.isButton()) {
+        if (interaction.customId.startsWith('setup:') && liveGuild) {
+          await dispatchLiveSetupButton(interaction, {
+            guildId: this.guildId,
+            actorUserId: interaction.user.id,
+            actorUsername: interaction.user.username,
+            actorRank,
+            discordGuild: liveGuild as unknown as GuildLike,
+            db: this.db,
+          });
+          return;
+        }
+        if (interaction.customId.startsWith('rolepanel:') && liveGuild && interaction.member && 'roles' in interaction.member) {
+          const res = await this.handleRolePanelButton(
+            interaction.customId,
+            interaction.member as GuildMember,
+            liveGuild,
+          );
+          await interaction.reply({ ephemeral: true, content: res.message });
+          return;
+        }
+        return;
+      }
+
       if (!interaction.isChatInputCommand()) return;
+
+      if (interaction.commandName === 'setup' && liveGuild) {
+        await handleLiveSlashSetup(interaction, {
+          guildId: this.guildId,
+          actorUserId: interaction.user.id,
+          actorUsername: interaction.user.username,
+          actorRank,
+          discordGuild: liveGuild as unknown as GuildLike,
+          db: this.db,
+        });
+        return;
+      }
+
       const sub = interaction.options.getSubcommand(false);
       const fullName = sub ? `${interaction.commandName} ${sub}` : interaction.commandName;
-
-      const memberRoles = interaction.member && 'roles' in interaction.member && 'cache' in interaction.member.roles
-        ? [...interaction.member.roles.cache.values()].map((r) => r.name)
-        : [];
-      const actorRank =
-        CLAN_RANK_ORDER.find((r) => memberRoles.includes(r)) ?? ('Recruit' as ClanRankName);
 
       const args: Record<string, string | number | boolean> = {};
       for (const opt of interaction.options.data) {
@@ -123,9 +465,13 @@ export class ShadowSlayersBotClient {
         actorUsername: interaction.user.username,
         actorRank,
         locale: interaction.locale.slice(0, 2) || 'en',
-        channelName: interaction.channel && 'name' in interaction.channel && interaction.channel.name ? interaction.channel.name : 'unknown',
+        channelName:
+          interaction.channel && 'name' in interaction.channel && interaction.channel.name
+            ? interaction.channel.name
+            : 'unknown',
         args,
         db: this.db,
+        discordExecutor: liveGuild ? this.buildDiscordExecutor(liveGuild) : undefined,
       });
 
       await interaction.reply({

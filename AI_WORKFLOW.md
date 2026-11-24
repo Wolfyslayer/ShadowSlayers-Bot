@@ -9,7 +9,7 @@ Every contributor or automated coding tool modifying this repository **must** fo
 1. **Read the Roadmap (`ROADMAP.md`)**
    - Identify completed phases, in-progress phases, blocked tasks, and acceptance criteria.
 2. **Read Architecture & Domain Documentation**
-   - Review `docs/ARCHITECTURE.md`, `docs/DATABASE.md`, `docs/SECURITY.md`, `docs/COMMANDS.md`, and `docs/MODULES.md`.
+   - Review `docs/LEGACY_COMPATIBILITY_AUDIT.md`, `docs/ARCHITECTURE.md`, `docs/DATABASE.md`, `docs/SECURITY.md`, `docs/COMMANDS.md`, and `docs/MODULES.md`.
 3. **Inspect Existing Code Before Modifying**
    - Never assume file structure or API contracts. Read target modules and shared types in `packages/shared/src/types.ts` before writing changes.
 4. **Identify the Current Phase**

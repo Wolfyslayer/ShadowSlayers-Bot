@@ -1,34 +1,58 @@
 export type ClanRankName =
-  | 'Shadow King'
-  | 'Shadow Council'
-  | 'Warlord'
-  | 'Elite Warrior'
-  | 'ShadowSlayer'
-  | 'Recruit';
+  | '👑 Shadow King'
+  | '🛡️ Shadow Council'
+  | '⚔️ Warlord'
+  | '🔥 Elite Warrior'
+  | '🖤 ShadowSlayer'
+  | '🌱 Recruit';
 
 export const CLAN_RANK_ORDER: ClanRankName[] = [
-  'Shadow King',
-  'Shadow Council',
-  'Warlord',
-  'Elite Warrior',
-  'ShadowSlayer',
-  'Recruit',
+  '👑 Shadow King',
+  '🛡️ Shadow Council',
+  '⚔️ Warlord',
+  '🔥 Elite Warrior',
+  '🖤 ShadowSlayer',
+  '🌱 Recruit',
 ];
 
 export type RoleCategory = 'clan_rank' | 'language' | 'class' | 'notification' | 'system' | 'verified';
+
+export type ResourceLifecycleState =
+  | 'discovered'
+  | 'mapped'
+  | 'missing'
+  | 'conflicting'
+  | 'proposed'
+  | 'confirmed'
+  | 'applying'
+  | 'applied'
+  | 'failed';
+
+export interface PermissionOverwriteSnapshot {
+  targetId: string;
+  targetType: 'role' | 'member';
+  targetName: string;
+  allow: string[];
+  deny: string[];
+}
 
 export interface GuildRoleRecord {
   id: string;
   discordRoleId: string | null;
   name: string;
+  aliases: string[];
   category: RoleCategory;
   rankOrder: number; // Higher = higher privilege for clan_rank; 0 for language/class/notification
+  position: number;
+  permissionsBitfield: string;
   colorHex: string;
   selfAssignable: boolean;
   exclusiveGroupId: string | null;
   discoveredFromExisting: boolean;
   mapped: boolean;
   mentionable: boolean;
+  lifecycleState: ResourceLifecycleState;
+  conflictCandidates?: { id: string; name: string }[];
 }
 
 export interface DiscoveredChannel {
@@ -36,11 +60,17 @@ export interface DiscoveredChannel {
   discordChannelId: string | null;
   name: string;
   type: 'text' | 'voice' | 'announcement' | 'forum';
-  categoryId: string;
+  categoryId: string | null;
+  topic: string;
   isPrivateLeadership: boolean;
+  accessClassification: 'public_onboarding' | 'verified_member' | 'clan_member' | 'class_hall' | 'leadership_only';
   languageCode: string | null;
   mappedRolePurpose: string | null;
   discoveredFromExisting: boolean;
+  required: boolean;
+  permissionOverwrites: PermissionOverwriteSnapshot[];
+  lifecycleState: ResourceLifecycleState;
+  conflictCandidates?: { id: string; name: string }[];
 }
 
 export interface DiscoveredCategory {
@@ -50,16 +80,30 @@ export interface DiscoveredCategory {
   position: number;
   isPrivateLeadership: boolean;
   discoveredFromExisting: boolean;
+  lifecycleState: ResourceLifecycleState;
+  permissionOverwrites: PermissionOverwriteSnapshot[];
+  conflictCandidates?: { id: string; name: string }[];
   channels: DiscoveredChannel[];
 }
 
 export interface ProposedSetupChange {
   id: string;
-  kind: 'map_existing_category' | 'map_existing_role' | 'create_channel' | 'create_role' | 'link_permission_guard';
+  kind:
+    | 'map_existing_category'
+    | 'map_existing_role'
+    | 'map_existing_channel'
+    | 'create_category'
+    | 'create_channel'
+    | 'create_role'
+    | 'resolve_conflict'
+    | 'link_permission_guard';
   targetName: string;
+  parentCategoryName?: string;
   reason: string;
   nonDestructive: true;
-  applied: boolean;
+  status: ResourceLifecycleState;
+  verifiedDiscordId: string | null;
+  error: string | null;
 }
 
 export interface ServerDiscoverySnapshot {
@@ -67,8 +111,11 @@ export interface ServerDiscoverySnapshot {
   guildName: string;
   lastDiscoveredAt: string;
   categories: DiscoveredCategory[];
+  uncategorizedChannels: DiscoveredChannel[];
   roles: GuildRoleRecord[];
   proposedChanges: ProposedSetupChange[];
+  conflictsCount: number;
+  missingCount: number;
   setupConfirmedBy: string | null;
   setupConfirmedAt: string | null;
 }
@@ -180,6 +227,8 @@ export interface ModerationCase {
   expiresAt: string | null;
   active: boolean;
   channelName: string | null;
+  discordExecutionStatus: 'verified_live' | 'dry_run_no_bot' | 'failed';
+  discordError: string | null;
   createdAt: string;
 }
 
@@ -276,6 +325,7 @@ export interface GuildMemberRecord {
   clanRank: ClanRankName;
   languageCodes: string[]; // Completely independent from clanRank
   gamingClasses: string[];
+  notificationRoles: string[];
   verified: boolean;
   xp: number;
   level: number;
@@ -597,6 +647,8 @@ export interface AuthUserSession {
   avatarUrl: string | null;
   provider: 'discord_oauth' | 'admin_passcode';
   clanRank: ClanRankName;
+  guildVerified: boolean;
+  discordRoleIds: string[];
   permissions: string[];
   expiresAt: string;
 }
