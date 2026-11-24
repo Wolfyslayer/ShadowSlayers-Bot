@@ -41,7 +41,7 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
         durationMinutes: action === 'timeout' || action === 'tempban' ? durationMinutes : null,
       });
       setReason('');
-      setFeedback(`Moderation action "${action}" recorded and logged.`);
+      setFeedback(`Moderation action "${action}" verified on Discord and logged.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Moderation failed');
     }
@@ -91,7 +91,7 @@ export const ModerationView: React.FC<ModerationViewProps> = ({
             >
               {guild.members.map((m) => (
                 <option key={m.userId} value={m.userId}>
-                  {m.username} ({m.clanRank})
+                  {m.username} ({m.clanRank ?? 'Unranked'})
                 </option>
               ))}
             </select>

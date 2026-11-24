@@ -53,3 +53,18 @@
 
 - **Automated Verification (Unit + Mocked Discord API):** Verified in `tests/platform.test.ts` and `tests/legacy-fixture.ts` (all 10 role combination access cases, 5-step onboarding, misplacement/type/permission-diff discovery, `👑 Shadow King` exclusion, partial failure retry, idempotency, command parity, and schema v3 migration).
 - **Live Discord Server Verification:** **Not yet executed** in this environment (requires live `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, and a real test Discord server).
+
+---
+
+## 5. Phase 0.3 Technical Corrections Audit
+
+| Problem Area | Legacy / Technical Risk | Phase 0.3 Corrective Resolution | Status |
+| :--- | :--- | :--- | :---: |
+| **npm Lockfile & CI** | `package-lock.json` missing; peer dependency conflict with `esbuild`; potential AI SDK contamination | Created synced `package-lock.json`, verified `npm ci`, added automated `security:check` script, updated CI workflow with security audit | **Verified** (0 AI packages, `npm ci` pass) |
+| **Slash Command Schemas** | Untyped command arguments; potential Discord API rejection on registration; missing subcommands | Centralized `CommandOptionSpec` with typed Discord.js builders (`String`, `Integer`, `User`, `Channel`, `Boolean`), min/max bounds, required-before-optional ordering, subcommand grouping (`onboarding`, `permissions`, `roles`, `automod`), and recursive option extraction | **Verified** (Discord REST JSON test pass) |
+| **Firestore Architecture** | Firestore not implemented with real Admin SDK; danger of silent fallback to local JSON in production | Implemented `FirestoreDatabaseAdapter` (`firebase-admin`) with guild isolation (`guilds/{id}`), subcollections (`logs`, `scheduledTasks`), transactions, per-guild async locks, and explicit credential aborts | **Verified** (InMemory & Mocked Firestore tests pass) |
+| **Offline False-Success** | Bot or dashboard claiming state changes when Discord Gateway offline or rejecting operations | Required live Discord connection before marking rules published, panels published, language channels created, onboarding roles assigned, or moderation penalties active; preserved prior DB state on failure | **Verified** (Offline rejection tests pass) |
+| **Security & Role Escalation** | Defaulting unranked members to `🌱 Recruit`; reflected XSS in 403 error body; stale OAuth2 sessions after demotion; unvalidated `:guildId` | Assigned `null` clanRank for unranked users (0 permissions); added `escapeHtml` in `/auth/callback`; added dynamic `revalidateDiscordOAuthSession`; added Express route param guard `safeIdSchema` | **Verified** (`walkthrough.md` PoC tests pass) |
+| **Live Discord Server Test** | Requires real Discord API credentials and live bot gateway connection | Pending user-provided `DISCORD_BOT_TOKEN` & `DISCORD_GUILD_ID` | **Blocked in Sandbox** |
+| **Live Cloud Firestore Test** | Requires real Firebase project and service account private key | Pending user-provided Firebase credentials | **Blocked in Sandbox** |
+

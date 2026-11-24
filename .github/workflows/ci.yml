@@ -3,8 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   verify:
@@ -15,7 +14,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - run: npm run lint
-      - run: npm test
-      - run: npm run build
+      - name: Install Dependencies
+        run: npm ci
+      - name: Security & AI Hygiene Check
+        run: npm run security:check
+      - name: Dependency Security Audit
+        run: npm audit --audit-level=high
+      - name: Typecheck and Lint
+        run: npm run lint
+      - name: Unit and Integration Tests
+        run: npm test
+      - name: Build Dashboard & Assets
+        run: npm run build
+

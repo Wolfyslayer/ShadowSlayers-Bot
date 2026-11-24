@@ -22,9 +22,9 @@ const RANK_NORMALIZATION: Record<string, ClanRankName> = {
   '🌱 Recruit': '🌱 Recruit',
 };
 
-export function normalizeClanRank(rank: string | undefined): ClanRankName {
-  if (!rank) return '🌱 Recruit';
-  return RANK_NORMALIZATION[rank.trim()] ?? '🌱 Recruit';
+export function normalizeClanRank(rank: string | null | undefined, hasClanRank?: boolean): ClanRankName | null {
+  if (hasClanRank === false || !rank) return null;
+  return RANK_NORMALIZATION[rank.trim()] ?? null;
 }
 
 /**
@@ -141,11 +141,19 @@ export function migrateDatabaseRoot(raw: DatabaseRoot): DatabaseRoot {
       }
     }
 
-    guild.members = (guild.members ?? []).map((m) => ({
-      ...m,
-      clanRank: normalizeClanRank(m.clanRank),
-      hasClanRank: m.hasClanRank ?? true,
-      notificationRoles: m.notificationRoles ?? [],
+    guild.members = (guild.members ?? []).map((m) => {
+      const normalizedRank = normalizeClanRank(m.clanRank, m.hasClanRank);
+      return {
+        ...m,
+        clanRank: normalizedRank,
+        hasClanRank: m.hasClanRank ?? normalizedRank !== null,
+        notificationRoles: m.notificationRoles ?? [],
+      };
+    });
+
+    guild.rolePanels = (guild.rolePanels ?? []).map((p) => ({
+      ...p,
+      publishedMessageId: p.publishedMessageId ?? null,
     }));
 
     guild.moderationCases = (guild.moderationCases ?? []).map((c) => ({

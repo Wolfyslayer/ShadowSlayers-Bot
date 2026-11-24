@@ -234,7 +234,7 @@ export const RolesView: React.FC<RolesViewProps> = ({
             </thead>
             <tbody className="divide-y divide-slate-800/70">
               {guild.members.map((m) => {
-                const hasRank = m.hasClanRank !== false;
+                const hasRank = m.hasClanRank !== false && m.clanRank !== null;
                 const readyForStep5 = m.verified && m.languageCodes.length > 0 && m.gamingClasses.length > 0;
                 return (
                   <tr key={m.userId} className="h-11">

@@ -28,3 +28,21 @@ Clan rank hierarchy (`👑 Shadow King` > `🛡️ Shadow Council` > `⚔️ War
 - All API endpoints validate request bodies with Zod (`packages/shared/src/validation.ts`).
 - Per-IP sliding-window rate limiter guards `/api/auth/*` and mutation routes.
 - AutoMod uses deterministic rules (never AI) and forbids automated permanent bans on uncertain triggers.
+
+## 5. Security & Authorization Hardening (Phase 0.3 Audit)
+1. **Unranked Member Privilege Escalation Prevention**:
+   - `resolveClanRankFromRoleNames(memberRoles)` matches strictly against canonical clan hierarchy roles (`👑 Shadow King` through `🌱 Recruit`).
+   - Members with no clan role (or only holding language/class/notification/verification roles) are assigned `clanRank: null` (never `'🌱 Recruit'`).
+   - Members with `clanRank: null` possess 0 clan capabilities and are blocked from executing privileged commands.
+2. **Reflected XSS Sanitization in `/auth/callback`**:
+   - Error messages returned in 403 HTML denial bodies are sanitized with `escapeHtml(authz.reason)` to prevent script injection.
+3. **Dynamic Discord OAuth2 Session Re-verification (`revalidateDiscordOAuthSession`)**:
+   - Session tokens are re-checked against live Discord member roles and guild membership on each authorized API request (or via 30s cached REST checks).
+   - If a member is kicked, leaves the guild (404), or is demoted below leadership (`⚔️ Warlord`), access is revoked immediately with HTTP 403.
+   - If a member is promoted to a higher clan rank, capabilities are dynamically updated in the session in memory.
+4. **Route Parameter Validation (`safeIdSchema`)**:
+   - Express router parameter guard (`app.param('guildId', ...)`) enforces `safeIdSchema` on all `/api/guild/:guildId/*` routes, rejecting directory traversal characters (`..`, `/`) and malformed IDs before database operations.
+5. **Offline Discord Operation Safety**:
+   - Actions requiring Discord state changes (moderation, role panel publishing, rules publishing, onboarding role assignments, language channel creation) require an active Discord Gateway connection.
+   - If the bot is offline or Discord returns an error, the database state is preserved untouched and the request returns HTTP 503 or 502 with a failed-attempt audit log entry.
+

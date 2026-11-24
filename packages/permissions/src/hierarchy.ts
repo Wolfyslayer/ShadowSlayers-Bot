@@ -107,7 +107,8 @@ const RANK_CAPABILITIES: Record<ClanRankName, PermissionCapability[]> = {
   '🌱 Recruit': ['overview.view'],
 };
 
-export function getRankWeight(rank: ClanRankName): number {
+export function getRankWeight(rank: ClanRankName | null | undefined): number {
+  if (!rank) return 0;
   return RANK_WEIGHTS[rank] ?? 0;
 }
 
@@ -116,22 +117,49 @@ export function isLeadershipRank(rank: ClanRankName | null | undefined): boolean
   return LEADERSHIP_CLAN_RANKS.includes(rank);
 }
 
-export function getCapabilitiesForRank(rank: ClanRankName): PermissionCapability[] {
+export function getCapabilitiesForRank(rank: ClanRankName | null | undefined): PermissionCapability[] {
+  if (!rank) return [];
   return [...(RANK_CAPABILITIES[rank] ?? [])];
 }
 
-export function hasCapability(rank: ClanRankName, capability: PermissionCapability): boolean {
+export function hasCapability(rank: ClanRankName | null | undefined, capability: PermissionCapability): boolean {
+  if (!rank) return false;
   return RANK_CAPABILITIES[rank]?.includes(capability) ?? false;
 }
 
-export function canActOnTargetRank(actorRank: ClanRankName, targetRank: ClanRankName): boolean {
+/**
+ * Resolves a member's highest verified Clan Hierarchy rank strictly from canonical clan rank roles.
+ * Never falls back to 🌱 Recruit for unranked/unknown users, and never grants clan rank from
+ * language, class, notification, or verification roles.
+ */
+export function resolveClanRankFromRoleNames(memberRoles: string[]): ClanRankName | null {
+  const normalizedInputs = memberRoles.map((r) => r.trim().toLowerCase()).filter(Boolean);
+  for (const rank of CLAN_RANK_ORDER) {
+    const spec = LEGACY_ROLE_SPECS.find((r) => r.category === 'clan_rank' && r.name === rank);
+    const aliases = spec ? [rank, ...spec.aliases] : [rank];
+    if (normalizedInputs.some((mr) => aliases.some((a) => a.toLowerCase() === mr))) {
+      return rank;
+    }
+  }
+  return null;
+}
+
+export function canActOnTargetRank(
+  actorRank: ClanRankName | null | undefined,
+  targetRank: ClanRankName | null | undefined,
+): boolean {
+  if (!actorRank) return false;
   if (actorRank === '👑 Shadow King' && targetRank !== '👑 Shadow King') {
     return true;
   }
   return getRankWeight(actorRank) > getRankWeight(targetRank);
 }
 
-export function canAssignClanRank(actorRank: ClanRankName, desiredRank: ClanRankName): boolean {
+export function canAssignClanRank(
+  actorRank: ClanRankName | null | undefined,
+  desiredRank: ClanRankName,
+): boolean {
+  if (!actorRank) return false;
   if (actorRank === '👑 Shadow King') {
     return true;
   }
@@ -160,7 +188,7 @@ export function applySelfRoleSelection(
 ): {
   allowed: boolean;
   reason?: string;
-  clanRank: ClanRankName;
+  clanRank: ClanRankName | null;
   languageCodes: string[];
   gamingClasses: string[];
   notificationRoles: string[];

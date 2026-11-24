@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import type { FirebaseAdminConfig } from '../../config/src/env.ts';
 import type {
   AdminAuthRecord,
   AuditLogEntry,
@@ -9,6 +10,7 @@ import type {
 } from '../../shared/src/types.ts';
 import { CURRENT_SCHEMA_VERSION, createInitialGuildSeed } from './seed.ts';
 import { migrateDatabaseRoot } from '../../../database/schema-migrations.ts';
+import { FirestoreDatabaseAdapter } from './firestore-adapter.ts';
 
 export interface DatabaseAdapter {
   readonly driverName: 'local' | 'firestore' | 'supabase';
@@ -26,7 +28,8 @@ export interface DatabaseAdapter {
 
 /**
  * Atomic file-backed persistent adapter for explicit local/development storage.
- * Implements the exact DatabaseAdapter interface so Firestore or Supabase adapters can plug in cleanly.
+ * Implements the exact DatabaseAdapter interface with concurrency-safe merge guards
+ * so concurrent log appends or task status transitions are never silently overwritten.
  */
 export class LocalPersistentAdapter implements DatabaseAdapter {
   readonly driverName = 'local' as const;
@@ -88,8 +91,35 @@ export class LocalPersistentAdapter implements DatabaseAdapter {
   }
 
   async saveGuild(guild: GuildState): Promise<void> {
-    guild.updatedAt = new Date().toISOString();
-    this.state.guilds[guild.guildId] = structuredClone(guild);
+    const existing = this.state.guilds[guild.guildId];
+    const next = structuredClone(guild);
+
+    if (existing) {
+      // Preserve concurrent audit logs and progressed scheduled task statuses
+      const seenLogIds = new Set(next.logs.map((l) => l.id));
+      const newerExistingLogs = existing.logs.filter((l) => !seenLogIds.has(l.id));
+      if (newerExistingLogs.length > 0) {
+        next.logs = [...newerExistingLogs, ...next.logs]
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+          .slice(0, 1500);
+      }
+
+      const existingTaskMap = new Map(existing.scheduledTasks.map((t) => [t.id, t]));
+      next.scheduledTasks = next.scheduledTasks.map((t) => {
+        const live = existingTaskMap.get(t.id);
+        if (
+          live &&
+          ((live.status === 'completed' && t.status !== 'completed') ||
+            (live.status === 'running' && t.status === 'pending'))
+        ) {
+          return structuredClone(live);
+        }
+        return t;
+      });
+    }
+
+    next.updatedAt = new Date().toISOString();
+    this.state.guilds[next.guildId] = next;
     await this.flush();
   }
 
@@ -123,6 +153,9 @@ export class LocalPersistentAdapter implements DatabaseAdapter {
     if (!guild) return;
     const task = guild.scheduledTasks.find((t) => t.id === taskId);
     if (!task) return;
+    if (task.status === 'completed' && patch.status && patch.status !== 'completed') {
+      return;
+    }
     Object.assign(task, patch);
     guild.updatedAt = new Date().toISOString();
     await this.flush();
@@ -138,20 +171,31 @@ export function createDatabaseAdapter(
   localDbPath: string,
   defaultGuildId: string,
   nodeEnv = process.env.NODE_ENV || 'development',
+  firebaseConfig: FirebaseAdminConfig | null = null,
 ): DatabaseAdapter {
-  if (adapterType === 'firestore' || adapterType === 'supabase') {
-    if (nodeEnv === 'production') {
+  if (adapterType === 'firestore') {
+    if (!firebaseConfig) {
+      if (nodeEnv === 'production') {
+        throw new Error(
+          `[Database] Production startup aborted: DATABASE_ADAPTER="firestore" was selected, ` +
+            `but FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY are not configured. ` +
+            `Silent fallback to local JSON storage is forbidden in production.`,
+        );
+      }
       throw new Error(
-        `[Database] Production startup aborted: DATABASE_ADAPTER="${adapterType}" was selected, ` +
-          `but external ${adapterType} runtime driver/credentials are not provisioned. ` +
-          `Silent fallback to local JSON storage is forbidden in production. ` +
-          `Configure ${adapterType} credentials or explicitly set DATABASE_ADAPTER=local for local testing.`,
+        `[Database] DATABASE_ADAPTER="firestore" requires FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY. ` +
+          `Set DATABASE_ADAPTER=local for explicit local development mode.`,
       );
     }
+    return new FirestoreDatabaseAdapter({ firebaseConfig, defaultGuildId });
+  }
+
+  if (adapterType === 'supabase') {
     throw new Error(
-      `[Database] DATABASE_ADAPTER="${adapterType}" is not yet wired to live ${adapterType} SDK credentials in this environment. ` +
-        `Set DATABASE_ADAPTER=local for explicit local development mode.`,
+      `[Database] Startup aborted: DATABASE_ADAPTER="supabase" is not implemented in this runtime (only a documented future fallback). ` +
+        `Silent fallback to local JSON storage is forbidden. Use DATABASE_ADAPTER=firestore with Firebase Admin credentials or DATABASE_ADAPTER=local for local development.`,
     );
   }
+
   return new LocalPersistentAdapter(localDbPath, defaultGuildId);
 }

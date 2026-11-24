@@ -3,9 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { ChannelType, PermissionFlagsBits } from 'discord.js';
+import { ApplicationCommandOptionType, ChannelType, PermissionFlagsBits } from 'discord.js';
 import { RuleBasedAutoModEngine } from '../apps/bot/src/services/automod.ts';
-import { SLASH_COMMANDS, executeSlashCommand } from '../apps/bot/src/commands/registry.ts';
+import {
+  SLASH_COMMANDS,
+  buildDiscordSlashCommandsJson,
+  executeSlashCommand,
+} from '../apps/bot/src/commands/registry.ts';
+import { extractDiscordInteractionArgs } from '../apps/bot/src/index.ts';
 import {
   createSetupSession,
   handleSetupButtonAction,
@@ -41,9 +46,14 @@ import {
   canBotManageRolePosition,
   canBotModerateMemberPosition,
   evaluateEffectiveChannelAccess,
+  hasCapability,
   mergeIndependentLanguageRoles,
+  resolveClanRankFromRoleNames,
 } from '../packages/permissions/src/hierarchy.ts';
-import { resolveAuthorizedDiscordOAuthSession } from '../packages/permissions/src/oauth-authz.ts';
+import {
+  resolveAuthorizedDiscordOAuthSession,
+  revalidateDiscordOAuthSession,
+} from '../packages/permissions/src/oauth-authz.ts';
 import {
   LEGACY_CATEGORY_SPECS,
   LEGACY_CHANNEL_SPECS,
@@ -529,10 +539,23 @@ test('Discord OAuth2 authorization enforces default-deny guild membership and li
   assert.equal(authorizedCouncil.session?.clanRank, '🛡️ Shadow Council');
 });
 
-test('Moderation execution blocks unconfirmed destructive actions and distinguishes verified_live vs failed Discord responses', async () => {
+test('Moderation execution rejects offline execution and distinguishes verified_live vs failed Discord responses', async () => {
   const tmpFile = path.join(os.tmpdir(), `shadowslayers-mod-${Date.now()}.json`);
   const db = new LocalPersistentAdapter(tmpFile, 'shadowslayers-primary');
   await db.init();
+
+  const offlineCmd = await executeSlashCommand('timeout', {
+    guildId: 'shadowslayers-primary',
+    actorUserId: 'u-101',
+    actorUsername: 'AldricShadow',
+    actorRank: '👑 Shadow King',
+    locale: 'en',
+    channelName: '💬・general-chat',
+    args: { member: 'DravenAsh', duration: 10, reason: 'Offline guard check' },
+    db,
+  });
+  assert.equal(offlineCmd.ok, false);
+  assert.equal(offlineCmd.data?.discordExecutionStatus, 'dry_run_no_bot');
 
   const unconfirmedBan = await executeSlashCommand('ban', {
     guildId: 'shadowslayers-primary',
@@ -543,6 +566,9 @@ test('Moderation execution blocks unconfirmed destructive actions and distinguis
     channelName: '💬・general-chat',
     args: { member: 'DravenAsh', reason: 'Test unconfirmed guard', confirmed: false },
     db,
+    discordExecutor: {
+      executeModeration: async () => ({ ok: true }),
+    },
   });
   assert.equal(unconfirmedBan.ok, false);
   assert.match(unconfirmedBan.title, /Confirmation Required/);
@@ -554,7 +580,7 @@ test('Moderation execution blocks unconfirmed destructive actions and distinguis
     actorRank: '👑 Shadow King',
     locale: 'en',
     channelName: '💬・general-chat',
-    args: { member: 'DravenAsh', minutes: 10, reason: 'Mock Discord failure check' },
+    args: { member: 'DravenAsh', duration: 10, reason: 'Mock Discord failure check' },
     db,
     discordExecutor: {
       executeModeration: async () => ({ ok: false, error: 'Missing ModerateMembers permission' }),
@@ -570,7 +596,7 @@ test('Moderation execution blocks unconfirmed destructive actions and distinguis
     actorRank: '👑 Shadow King',
     locale: 'en',
     channelName: '💬・general-chat',
-    args: { member: 'DravenAsh', minutes: 10, reason: 'Mock Discord success check' },
+    args: { member: 'DravenAsh', duration: 10, reason: 'Mock Discord success check' },
     db,
     discordExecutor: {
       executeModeration: async () => ({ ok: true }),
@@ -589,7 +615,7 @@ test('Database adapter refuses silent fallback to local JSON when firestore or s
   );
   assert.throws(
     () => createDatabaseAdapter('supabase', '.data/test.json', 'shadowslayers-primary', 'production'),
-    /Silent fallback to local JSON storage is forbidden in production/,
+    /Silent fallback to local JSON storage is forbidden/,
   );
 });
 
@@ -725,13 +751,13 @@ test('Persistent scheduler executes due tasks idempotently without double runs',
   fs.rmSync(tmpFile, { force: true });
 });
 
-test('Phase 0.2 slash command parity executes cleanly across all required commands', async () => {
+test('Slash command parity, Discord.js schema options, subcommand extraction, and offline false-success prevention', async () => {
   const names = new Set(SLASH_COMMANDS.map((c) => c.name));
   for (const required of [
     'help', 'about', 'bot-status', 'profile', 'userinfo', 'avatar', 'server', 'serverinfo',
-    'language', 'onboarding', 'modules', 'dashboard',
-    'setup', 'config', 'permissions', 'permissions preview', 'rules publish', 'custom-response',
-    'roles', 'roles publish', 'automod status', 'automod test', 'false-positive',
+    'language', 'onboarding status', 'onboarding active_player', 'modules', 'dashboard',
+    'setup', 'config', 'permissions matrix', 'permissions preview', 'rules publish', 'custom-response',
+    'roles list', 'roles publish', 'automod status', 'automod test', 'false-positive',
     'warn', 'warnings', 'timeout', 'untimeout', 'kick', 'ban', 'tempban', 'unban',
     'purge', 'slowmode', 'lock', 'unlock', 'modlog', 'case', 'appeal',
     'suggest', 'poll', 'giveaway', 'event', 'remind',
@@ -740,6 +766,75 @@ test('Phase 0.2 slash command parity executes cleanly across all required comman
   ]) {
     assert.ok(names.has(required), `Missing slash command: ${required}`);
   }
+
+  // Validate Discord.js REST command JSON schema (Problem B)
+  const discordJson = buildDiscordSlashCommandsJson() as Array<{
+    name: string;
+    description: string;
+    options?: Array<{
+      name: string;
+      type: number;
+      description: string;
+      required?: boolean;
+      options?: Array<{ name: string; type: number; description: string; required?: boolean }>;
+    }>;
+  }>;
+
+  const assertRequiredBeforeOptional = (
+    opts: Array<{ name: string; required?: boolean }>,
+    label: string,
+  ) => {
+    let seenOptional = false;
+    for (const o of opts) {
+      assert.match(o.name, /^[a-z0-9_-]{1,32}$/, `Invalid Discord option name "${o.name}" in ${label}`);
+      if (o.required) {
+        assert.equal(seenOptional, false, `Required option "${o.name}" appears after optional option in ${label}`);
+      } else {
+        seenOptional = true;
+      }
+    }
+  };
+
+  for (const cmd of discordJson) {
+    assert.match(cmd.name, /^[a-z0-9_-]{1,32}$/, `Invalid root command name: ${cmd.name}`);
+    assert.ok(cmd.description.length > 0 && cmd.description.length <= 100);
+    const opts = cmd.options ?? [];
+    const hasSub = opts.some((o) => o.type === ApplicationCommandOptionType.Subcommand);
+    if (hasSub) {
+      for (const sc of opts) {
+        assert.equal(sc.type, ApplicationCommandOptionType.Subcommand, `Mixed subcommand/option in /${cmd.name}`);
+        assert.match(sc.name, /^[a-z0-9_-]{1,32}$/);
+        assertRequiredBeforeOptional(sc.options ?? [], `/${cmd.name} ${sc.name}`);
+      }
+    } else {
+      assertRequiredBeforeOptional(opts, `/${cmd.name}`);
+    }
+  }
+
+  const timeoutDef = discordJson.find((c) => c.name === 'timeout');
+  assert.deepEqual(
+    timeoutDef?.options?.map((o) => [o.name, o.required]),
+    [
+      ['member', true],
+      ['duration', true],
+      ['reason', true],
+    ],
+  );
+  const rulesDef = discordJson.find((c) => c.name === 'rules');
+  assert.equal(rulesDef?.options?.[0]?.name, 'publish');
+  assert.equal(rulesDef?.options?.[0]?.options?.[0]?.name, 'channel');
+
+  // Verify nested subcommand option extraction (Problem B)
+  const extracted = extractDiscordInteractionArgs([
+    {
+      name: 'publish',
+      type: ApplicationCommandOptionType.Subcommand,
+      options: [
+        { name: 'panel_id', type: ApplicationCommandOptionType.String, value: 'panel-languages' },
+      ],
+    } as never,
+  ]);
+  assert.equal(extracted.panel_id, 'panel-languages');
 
   const tmpFile = path.join(os.tmpdir(), `shadowslayers-cmd-${Date.now()}.json`);
   const db = new LocalPersistentAdapter(tmpFile, 'shadowslayers-primary');
@@ -755,14 +850,41 @@ test('Phase 0.2 slash command parity executes cleanly across all required comman
     db,
   };
 
-  assert.equal((await executeSlashCommand('roles publish', { ...baseCtx, args: { panelId: 'panel-languages' } })).ok, true);
+  // Offline /rules publish and /roles publish MUST fail and preserve prior DB state (Problem D)
+  const offlineRules = await executeSlashCommand('rules publish', { ...baseCtx, args: { channel: '📜・rules' } });
+  assert.equal(offlineRules.ok, false);
+  const guildAfterOfflineRules = await db.getGuild('shadowslayers-primary');
+  assert.equal(guildAfterOfflineRules?.onboarding.rulesPublishedAt, null);
+
+  const offlineRoles = await executeSlashCommand('roles publish', { ...baseCtx, args: { panel_id: 'panel-languages' } });
+  assert.equal(offlineRoles.ok, false);
+  const guildAfterOfflineRoles = await db.getGuild('shadowslayers-primary');
+  assert.equal(guildAfterOfflineRoles?.rolePanels.find((p) => p.id === 'panel-languages')?.published, false);
+
+  // Argument validation rejects invalid duration BEFORE side effects
+  const invalidTimeout = await executeSlashCommand('timeout', {
+    ...baseCtx,
+    args: { member: 'DravenAsh', duration: 0, reason: 'Bad duration' },
+    discordExecutor: { executeModeration: async () => ({ ok: true }) },
+  });
+  assert.equal(invalidTimeout.ok, false);
+
+  // Live mocked executor succeeds and updates state cleanly
+  const mockExecutor = {
+    publishRolePanel: async () => ({ ok: true, messageId: 'msg-panel-1' }),
+    publishRulesMessage: async () => ({ ok: true, messageId: 'msg-rules-1' }),
+  };
+
+  assert.equal((await executeSlashCommand('roles publish', { ...baseCtx, args: { panel_id: 'panel-languages' }, discordExecutor: mockExecutor })).ok, true);
   assert.equal((await executeSlashCommand('roles list', { ...baseCtx, args: {} })).ok, true);
+  assert.equal((await executeSlashCommand('roles', { ...baseCtx, args: {} })).ok, true);
   assert.equal((await executeSlashCommand('permissions preview', { ...baseCtx, args: {} })).ok, true);
   assert.equal((await executeSlashCommand('permissions matrix', { ...baseCtx, args: {} })).ok, true);
-  assert.equal((await executeSlashCommand('rules publish', { ...baseCtx, args: { channel: '📜・rules' } })).ok, true);
+  assert.equal((await executeSlashCommand('permissions', { ...baseCtx, args: {} })).ok, true);
+  assert.equal((await executeSlashCommand('rules publish', { ...baseCtx, args: { channel: '📜・rules' }, discordExecutor: mockExecutor })).ok, true);
   assert.equal((await executeSlashCommand('bot-status', { ...baseCtx, args: {} })).ok, true);
   assert.equal((await executeSlashCommand('automod status', { ...baseCtx, args: {} })).ok, true);
-  assert.equal((await executeSlashCommand('automod test', { ...baseCtx, args: { content: 'discord.gg/abc' } })).ok, true);
+  assert.equal((await executeSlashCommand('automod test', { ...baseCtx, args: { message: 'discord.gg/abc' } })).ok, true);
   assert.equal((await executeSlashCommand('onboarding', { ...baseCtx, args: {} })).ok, true);
   assert.equal((await executeSlashCommand('serverinfo', { ...baseCtx, args: {} })).ok, true);
   assert.equal((await executeSlashCommand('userinfo', { ...baseCtx, args: { member: 'AldricShadow' } })).ok, true);
@@ -772,9 +894,137 @@ test('Phase 0.2 slash command parity executes cleanly across all required comman
     true,
   );
   assert.equal(
-    (await executeSlashCommand('false-positive', { ...baseCtx, args: { channel: '💬・general-chat', content: 'Legit link', notes: 'False alarm' } })).ok,
+    (await executeSlashCommand('false-positive', { ...baseCtx, args: { message_id: '99887766', channel: '💬・general-chat', content: 'Legit link', reason: 'False alarm' } })).ok,
     true,
   );
 
   fs.rmSync(tmpFile, { force: true });
 });
+
+test('Security & role handling: unranked users get null rank with zero permissions, OAuth2 rejects stale departures and revalidates drift', async () => {
+  // Problem E1: Non-clan roles NEVER yield 🌱 Recruit
+  assert.equal(resolveClanRankFromRoleNames([]), null);
+  assert.equal(resolveClanRankFromRoleNames(['✅ Verified', '🇬🇧 English', '⚔️ Warrior', '🐉 Boss Pings']), null);
+  assert.equal(resolveClanRankFromRoleNames(['🌱 Recruit', '⚔️ Warlord']), '⚔️ Warlord');
+
+  assert.equal(hasCapability(null, 'overview.view'), false);
+  assert.equal(hasCapability(null, 'moderation.execute'), false);
+
+  const tmpFile = path.join(os.tmpdir(), `shadowslayers-sec-${Date.now()}.json`);
+  const db = new LocalPersistentAdapter(tmpFile, 'shadowslayers-primary');
+  await db.init();
+
+  // Unranked user cannot run /help or /modlog or target another user in /onboarding
+  const deniedHelp = await executeSlashCommand('help', {
+    guildId: 'shadowslayers-primary',
+    actorUserId: 'u-unranked',
+    actorUsername: 'NewJoiner',
+    actorRank: null,
+    locale: 'en',
+    channelName: '📜・rules',
+    args: {},
+    db,
+  });
+  assert.equal(deniedHelp.ok, false);
+  assert.equal(deniedHelp.title, 'Permission Denied');
+
+  // Step 5 onboarding offline MUST NOT save 🌱 Recruit in DB (Problem D)
+  const guild = await db.getGuild('shadowslayers-primary');
+  assert.ok(guild);
+  guild.members.push({
+    userId: 'u-unranked',
+    username: 'NewJoiner',
+    displayName: 'NewJoiner',
+    avatarUrl: null,
+    clanRank: null,
+    hasClanRank: false,
+    languageCodes: ['en'],
+    gamingClasses: ['⚔️ Warrior'],
+    notificationRoles: [],
+    verified: true,
+    xp: 0,
+    level: 1,
+    messagesCount: 0,
+    voiceMinutes: 0,
+    achievements: [],
+    customBio: '',
+    lastXpAt: null,
+    lastMessageHash: null,
+    joinedAt: new Date().toISOString(),
+    lastActiveAt: new Date().toISOString(),
+    isDeparted: false,
+    deletedAt: null,
+  });
+  await db.saveGuild(guild);
+
+  const offlineOnb = await executeSlashCommand('onboarding active_player', {
+    guildId: 'shadowslayers-primary',
+    actorUserId: 'u-unranked',
+    actorUsername: 'NewJoiner',
+    actorRank: null,
+    locale: 'en',
+    channelName: '📜・rules',
+    args: {},
+    db,
+  });
+  assert.equal(offlineOnb.ok, false);
+  const afterOfflineOnb = await db.getGuild('shadowslayers-primary');
+  assert.equal(afterOfflineOnb?.members.find((m) => m.userId === 'u-unranked')?.clanRank, null);
+
+  // Problem E2: OAuth2 live 404 denies even if userGuildIds still listed targetGuildId
+  const seed = createInitialGuildSeed('guild-sec-1');
+  const warlordRole = seed.discovery.roles.find((r) => r.name === '⚔️ Warlord')!;
+  warlordRole.discordRoleId = 'role-warlord-1';
+
+  const departedAttempt = resolveAuthorizedDiscordOAuthSession({
+    discordUser: { id: 'u-103', username: 'WarlordVex', avatar: null },
+    userGuildIds: ['guild-sec-1'],
+    targetGuildId: 'guild-sec-1',
+    liveMemberRoleIds: null,
+    liveGuildCheckAttempted: true,
+    guildState: seed,
+  });
+  assert.equal(departedAttempt.authorized, false);
+  assert.equal(departedAttempt.statusCode, 403);
+
+  // Problem E3: OAuth2 dynamic re-verification detects promotion and revokes demotion/departure
+  const validLogin = resolveAuthorizedDiscordOAuthSession({
+    discordUser: { id: 'u-103', username: 'WarlordVex', avatar: null },
+    userGuildIds: ['guild-sec-1'],
+    targetGuildId: 'guild-sec-1',
+    liveMemberRoleIds: ['role-warlord-1'],
+    liveGuildCheckAttempted: true,
+    guildState: seed,
+  });
+  assert.equal(validLogin.authorized, true);
+  assert.ok(validLogin.session);
+
+  const promoted = revalidateDiscordOAuthSession({
+    session: validLogin.session,
+    guildState: seed,
+    liveMemberRoleNames: ['🛡️ Shadow Council'],
+    liveCheckAttempted: true,
+  });
+  assert.equal(promoted.valid, true);
+  assert.equal(promoted.updatedSession?.clanRank, '🛡️ Shadow Council');
+
+  const demoted = revalidateDiscordOAuthSession({
+    session: validLogin.session,
+    guildState: seed,
+    liveMemberRoleNames: ['🌱 Recruit'],
+    liveCheckAttempted: true,
+  });
+  assert.equal(demoted.valid, false);
+
+  const kicked = revalidateDiscordOAuthSession({
+    session: validLogin.session,
+    guildState: seed,
+    liveMemberRoleNames: null,
+    liveMemberRoleIds: null,
+    liveCheckAttempted: true,
+  });
+  assert.equal(kicked.valid, false);
+
+  fs.rmSync(tmpFile, { force: true });
+});
+

@@ -122,7 +122,12 @@ export const CommandsView: React.FC<CommandsViewProps> = ({
             <tbody className="divide-y divide-slate-800/70">
               {commands.map((c) => (
                 <tr key={c.name} className="h-9">
-                  <td className="py-1.5 pr-3 font-mono-tabular text-xs text-amber-400 whitespace-nowrap">/{c.name}</td>
+                  <td className="py-1.5 pr-3 font-mono-tabular text-xs text-amber-400 whitespace-nowrap">
+                    /{c.name}
+                    {c.optionsSummary.length > 0 && (
+                      <span className="text-slate-500 ml-1">({c.optionsSummary.join(', ')})</span>
+                    )}
+                  </td>
                   <td className="py-1.5 pr-3 text-xs text-slate-400 whitespace-nowrap">{c.category}</td>
                   <td className="py-1.5 text-xs text-slate-300">{c.description}</td>
                 </tr>

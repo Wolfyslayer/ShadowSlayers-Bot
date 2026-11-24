@@ -105,7 +105,7 @@ export const MembersView: React.FC<MembersViewProps> = ({ guild, onUpdateMember 
                 >
                   <td className="py-2 pr-3 font-medium text-slate-100">{m.displayName}</td>
                   <td className="py-2 pr-3 text-xs text-amber-300">
-                    {m.hasClanRank === false ? 'Unranked (Onboarding)' : m.clanRank}
+                    {m.hasClanRank === false || !m.clanRank ? 'Unranked (Onboarding)' : m.clanRank}
                   </td>
                   <td className="py-2 pr-3 font-mono-tabular text-xs text-slate-300">
                     {m.languageCodes.join(', ') || 'none'}
@@ -153,14 +153,18 @@ export const MembersView: React.FC<MembersViewProps> = ({ guild, onUpdateMember 
               <div>
                 <label className="block text-xs text-slate-400 mb-1.5">Clan Rank (Exclusive Hierarchy)</label>
                 <select
-                  value={selected.clanRank}
-                  onChange={(e) =>
+                  value={selected.clanRank ?? ''}
+                  onChange={(e) => {
+                    if (!e.target.value) return;
                     onUpdateMember(selected.userId, { clanRank: e.target.value as ClanRankName })
                       .then(() => setFeedback(`Updated clan rank for ${selected.username}.`))
-                      .catch((err) => setError(err instanceof Error ? err.message : 'Rank update blocked'))
-                  }
+                      .catch((err) => setError(err instanceof Error ? err.message : 'Rank update blocked'));
+                  }}
                   className="w-full px-3 py-2 rounded-lg bg-[#0B0D12] border border-slate-800 text-sm text-slate-100"
                 >
+                  <option value="" disabled>
+                    Unranked (Onboarding)
+                  </option>
                   {CLAN_RANK_ORDER.map((r) => (
                     <option key={r} value={r}>
                       {r}

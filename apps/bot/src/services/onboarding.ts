@@ -157,7 +157,7 @@ export function applyRulesVerificationReaction(
       username: input.username,
       displayName: input.username,
       avatarUrl: null,
-      clanRank: '🌱 Recruit',
+      clanRank: null,
       hasClanRank: false, // Unranked until Step 5 active-player action
       languageCodes: [],
       gamingClasses: [],

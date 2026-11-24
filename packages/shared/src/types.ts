@@ -285,6 +285,7 @@ export interface RolePanel {
   category: RoleCategory;
   published: boolean;
   publishedAt: string | null;
+  publishedMessageId?: string | null;
   items: RolePanelItem[];
 }
 
@@ -410,7 +411,7 @@ export interface GuildMemberRecord {
   username: string;
   displayName: string;
   avatarUrl: string | null;
-  clanRank: ClanRankName;
+  clanRank: ClanRankName | null;
   hasClanRank?: boolean;
   languageCodes: string[]; // Completely independent from clanRank
   gamingClasses: string[];
@@ -740,7 +741,9 @@ export interface AuthUserSession {
   provider: 'discord_oauth' | 'admin_passcode';
   clanRank: ClanRankName;
   guildVerified: boolean;
+  guildId?: string;
   discordRoleIds: string[];
   permissions: string[];
+  lastVerifiedAt?: string;
   expiresAt: string;
 }

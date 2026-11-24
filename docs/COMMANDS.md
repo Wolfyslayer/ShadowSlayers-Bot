@@ -3,67 +3,71 @@
 All commands enforce RBAC permission validation, localized responses, structured error handling, and audit logging. No AI commands exist.
 
 ## General & Diagnostics
-- `/help` — Show categorized command directory
+- `/help [category?]` — Show categorized command directory (optional String filter)
 - `/about` — Display bot architecture, version, and realm summary
 - `/bot-status` — Inspect Discord Gateway connection mode, tag, guild count, and database driver
-- `/profile` — View member XP, level, clan rank, classes, and languages
-- `/userinfo` — Inspect a member's clan rank, verification state, classes, and languages
-- `/avatar` — View a member's avatar URL
+- `/profile [member?]` — View member XP, level, clan rank, classes, and languages (optional User option)
+- `/userinfo [member?]` — Inspect a member's clan rank, verification state, classes, and languages (optional User option)
+- `/avatar [member?]` — View a member's avatar URL (optional User option)
 - `/server` / `/serverinfo` — Show discovered server categories, roles, and member counts
-- `/language` — Select or toggle personal enabled language roles
+- `/language [code?]` — Select or toggle personal enabled language roles (String option)
 - `/modules` — View enabled/disabled server modules
 - `/dashboard` — Retrieve direct link to the administration web dashboard
 
 ## Setup, Onboarding & Administration
-- `/setup` — Ephemeral, initiator-locked server discovery preview (`Missing only`, two-step confirmed `Full setup`, `Cancel`, partial-failure retry)
-- `/config` — Inspect or update core guild configuration values
-- `/permissions` / `/permissions preview` / `/permissions matrix` — Run permission audit, preview 10-case access boundary matrix, or view capability table
-- `/rules publish` — Publish the `📜・rules` verification message with `✅` reaction & active-player button
-- `/onboarding` — Check 5-step onboarding status or complete Step 5 active-player `🌱 Recruit` confirmation
+- `/setup [confirm?]` — Ephemeral, initiator-locked server discovery preview (Boolean option)
+- `/config [module?] [enabled?]` — Inspect or toggle core guild module settings (String module, Boolean enabled)
+- `/permissions matrix` — Inspect clan rank hierarchy and capability matrix
+- `/permissions preview` — Run permission audit and preview 10-case access boundary matrix
+- `/rules publish [channel?]` — Publish the `📜・rules` verification message with `✅` reaction gate (optional Channel option; requires live Discord Gateway)
+- `/onboarding status [member?]` — Check 5-step onboarding status for yourself or target member
+- `/onboarding active_player [member?]` — Claim Step 5 active-player `🌱 Recruit` rank (requires Steps 1–3 complete and live Discord Gateway)
 
 ## Roles & Deterministic AutoMod
-- `/roles` / `/roles list` — List role panels and self-assignable role groups
-- `/roles publish` — Publish configured role-selection panels (strictly panel publishing; never runs server setup)
-- `/automod status` — Inspect active deterministic AutoMod rules and lockdown state
-- `/automod test` — Test sample message text against deterministic AutoMod rules
-- `/false-positive` — Submit an AutoMod false-positive report for moderator review
-- `/custom-response` — Add, list, or remove deterministic keyword/prefix/exact responses (Zero AI)
+- `/roles list` — List role panels and self-assignable role groups
+- `/roles publish <panel_id>` — Publish configured role-selection panels to Discord (required String panel_id; strictly panel publishing; requires live Discord Gateway)
+- `/automod status` — Inspect active deterministic AutoMod rules, lockdown state, and false-positive queue
+- `/automod test <message> [channel?] [mentions?]` — Test sample message text against deterministic AutoMod rules (required String message, Channel, Integer mentions 0–50)
+- `/false-positive <message_id> <reason> [channel?] [content?]` — Submit an AutoMod false-positive report for moderator review (required String message_id & reason)
+- `/custom-response <action> [trigger?] [response?] [match_mode?]` — Add, list, or remove deterministic keyword/prefix/exact responses (required String action: `list`, `add`, `remove`; choices: `contains`, `exact`, `startsWith`; Zero AI)
+
 
 ## Moderation
-- `/warn` — Issue a formal warning with unique case ID
-- `/warnings` — List active and historical warnings for a member
-- `/timeout` — Timeout a member for a configured duration
-- `/untimeout` — Remove an active timeout early
-- `/kick` — Kick a member with logged case reason
-- `/ban` — Permanently ban a member with case record
-- `/tempban` — Temporarily ban a member and schedule automatic unban task
-- `/unban` — Revoke a ban by user ID
-- `/purge` — Bulk-delete messages with audit logging
-- `/slowmode` — Configure channel slowmode seconds
-- `/lock` — Lock channel messaging permissions
-- `/unlock` — Restore channel messaging permissions
-- `/modlog` — Query recent moderation cases
-- `/case` — Inspect a single moderation case by ID
-- `/appeal` — Submit a moderation appeal for staff review
+- `/warn <member> <reason>` — Issue a formal warning with unique case ID (required User member, String reason)
+- `/warnings <member>` — List active and historical warnings for a member (required User member)
+- `/timeout <member> <duration> <reason>` — Timeout a member (required User member, Integer duration 1–40320 minutes, String reason)
+- `/untimeout <member> [reason?]` — Remove an active timeout early (required User member, optional String reason)
+- `/kick <member> <reason> [confirmed?]` — Kick a member with logged case reason (required User member, String reason, optional Boolean confirmed)
+- `/ban <member> <reason> [delete_message_days?] [confirmed?]` — Permanently ban a member with case record (required User member, String reason, Integer delete_message_days 0–7, Boolean confirmed)
+- `/tempban <member> <duration> <reason>` — Temporarily ban a member and schedule automatic unban task (required User member, Integer duration 1–525600 minutes, String reason)
+- `/unban <user_id> <reason>` — Revoke a ban by user ID (required String user_id, String reason)
+- `/purge <amount> [channel?] [confirmed?]` — Bulk-delete messages with audit logging (required Integer amount 1–100, optional Channel channel, Boolean confirmed)
+- `/slowmode <seconds> [channel?]` — Configure channel slowmode seconds (required Integer seconds 0–21600, optional Channel channel)
+- `/lock <channel> <reason>` — Lock channel messaging permissions (required Channel channel, String reason)
+- `/unlock <channel> <reason>` — Restore channel messaging permissions (required Channel channel, String reason)
+- `/modlog [limit?]` — Query recent moderation cases (optional Integer limit 1–25)
+- `/case <case_id>` — Inspect a single moderation case by ID (required String case_id)
+- `/appeal <case_id> <reason>` — Submit a moderation appeal for staff review (required String case_id, String reason)
 
 ## Community
-- `/suggest` — Submit a community suggestion for voting
-- `/poll` — Create a multi-option poll
-- `/giveaway` — Launch a timed giveaway with scheduled winner draw
-- `/event` — Schedule a community or raid event with RSVPs
-- `/remind` — Schedule a persistent personal or channel reminder
+- `/suggest <title> <description>` — Submit a community suggestion for voting (required String title, String description)
+- `/poll <question> <options>` — Create a multi-option poll (required String question, String options: 2–6 comma-separated choices)
+- `/giveaway <prize> <minutes>` — Launch a timed giveaway with scheduled winner draw (required String prize, Integer minutes 1–43200)
+- `/event <title> [type?]` — Schedule a community or raid event with RSVPs (required String title, String type choices: `raid`, `dungeon`, `community`, `tournament`)
+- `/remind <minutes> <message>` — Schedule a persistent personal or channel reminder (required Integer minutes 1–525600, String message)
 
 ## Recruitment
 - `/recruitment` — View open recruitment categories
-- `/apply` — Submit a clan, staff, or event application
+- `/apply <category> <summary>` — Submit a clan, staff, or event application (required String category: `clan`, `staff`; String summary)
 - `/applications` — Review pending applications (staff)
 
 ## Support
-- `/ticket` — Create, claim, transfer, close, or reopen a support ticket
+- `/ticket <subject>` — Create a numbered support ticket (required String subject)
 
 ## Clan
 - `/clan` — Overview of ShadowSlayers hierarchy, teams, and upcoming raids
-- `/members` — Search clan roster by rank, class, or language
+- `/members [query?]` — Search clan roster by rank or username (optional String query)
 - `/leaderboard` — Display XP & progression rankings
 - `/achievements` — View unlocked and available clan achievements
 - `/activity` — Inspect member activity and inactivity metrics
+

@@ -36,3 +36,23 @@ All collections enforce server-level isolation via `guildId` and consistent ISO-
 - Schema versioning is tracked via `schemaVersion` and upgraded deterministically by `database/schema-migrations.ts`.
 - Deleted Discord members retain historical moderation cases, ticket transcripts, and logs using immutable `userId` + cached `usernameSnapshot` (`isDeparted: true`) so audit trails never break.
 - Backups: Export/import snapshot JSON via `/api/guild/:guildId/backup` (admin-only) or Firebase CLI / scheduled Firestore exports.
+
+## 4. Production Firestore Implementation (`FirestoreDatabaseAdapter`)
+- **Package**: `packages/database/src/firestore-adapter.ts`
+- **SDK**: `firebase-admin` (Node.js official Firebase Admin SDK, server-side only).
+- **Credentials**: Loaded from environment variables `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY` (with `\n` normalization).
+- **Document Model**:
+  - `shadowslayers_meta/root`: Stores global database schema version (`schemaVersion: 3`) and salted/hashed admin credentials (`adminAuth`).
+  - `guilds/{guildId}`: Stores core guild state (discovery mapping, modules, languages, members, role panels, onboarding config, automod rules, custom responses).
+  - `guilds/{guildId}/logs/{logId}`: Subcollection storing structured audit log entries. Avoids Firestore 1MB document limit.
+  - `guilds/{guildId}/scheduledTasks/{taskId}`: Subcollection storing pending and completed scheduler tasks.
+- **Transactions & Concurrency**:
+  - `saveGuild()` uses Firestore transactions to read existing scheduled tasks and merge them safely, preventing task regression (e.g., a completed or running task is never reverted to pending by a stale guild save).
+  - An in-memory queue (`withGuildLock()`) ensures sequential execution per guild, preventing concurrent read-modify-write collisions.
+- **Resilience**:
+  - Automatically retries transient errors (`unavailable`, `deadline-exceeded`, `aborted`, `resource-exhausted`) with exponential backoff (default 3 retries).
+  - Fatal authentication or permission errors reject immediately with descriptive logging.
+- **Non-Fallback Policy**:
+  - If `DATABASE_ADAPTER=firestore` is configured but credentials are missing, production startup throws an explicit fatal error (`Silent fallback to local JSON storage is forbidden in production`).
+  - Setting `DATABASE_ADAPTER=supabase` throws an explicit startup error indicating that Supabase is an unimplemented future adapter.
+

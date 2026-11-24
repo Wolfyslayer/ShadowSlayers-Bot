@@ -6,11 +6,11 @@
 
 | Metric | Status |
 | :--- | :--- |
-| **Current Phase** | Phase 0.2 – ShadowSlayers Legacy Reconstruction & Correction (Directly on `main`) |
+| **Current Phase** | Phase 0.3 – ShadowSlayers Technical Corrections & Verification (Directly on `main`) |
 | **Verification Model** | Every phase tracks 5 gates: **Implemented**, **Automated Tests Passed**, **Live Discord Test Passed**, **Reviewed & Approved**, **Deployed** |
-| **Automated Implementation Progress** | Phase 0.2 legacy reconstruction (16 roles, 9 categories, 32 text channels, 5 voice channels, 5-step onboarding, permission & misplacement audits, command parity, schema v3) implemented & verified via **unit + mocked Discord API tests**; **Live Discord Server Verification Pending** (`DISCORD_BOT_TOKEN` & live guild test required) |
-| **Blocked / External Dependencies** | `Wolfyslayer/shadow-slayers-discord-setup` inaccessible (reconstructed strictly from Phase 0.2 specification); live Discord Gateway & external Firestore/GitHub remote push credentials pending |
-| **Test Status** | Exhaustive unit + mocked Discord API test suite in `tests/legacy-fixture.ts` and `tests/platform.test.ts` (NOT live Discord server tests) |
+| **Automated Implementation Progress** | Phase 0.3 Technical Corrections complete (package-lock.json & npm ci, real Discord.js slash command options, FirestoreDatabaseAdapter with Firebase Admin SDK, offline false-success elimination, null clanRank security hardening, XSS escaping, dynamic OAuth2 re-verification, safeIdSchema validation). All **21/21 automated unit & integration test suites passed**. |
+| **Blocked / External Dependencies** | Live Discord Server Gateway verification pending (`DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`); live Cloud Firestore credentials pending (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`); GitHub remote origin push pending (`git remote` not configured in sandbox). |
+| **Test Status** | 21/21 automated test suites passed (`tests/platform.test.ts`, `tests/firestore-adapter.test.ts`, `scripts/security-check.cjs`). Mocked/automated tests are strictly distinguished from live Discord/Firestore server tests. |
 
 ---
 
@@ -61,6 +61,27 @@
   - [x] Implement `/rules publish`, `/permissions preview`, `/bot-status`, `/automod status`, `/automod test`, `/onboarding`, `/serverinfo`, `/userinfo`, `/avatar`, `/custom-response`, `/false-positive`, and destructive moderation confirmation guards
   - [x] Author `LEGACY_COMPATIBILITY_AUDIT.md`, `LEGACY_SERVER_SPECIFICATION.md`, `FEATURE_PARITY.md`, `SETUP_MANAGER.md`, and `ROLE_AND_PERMISSION_MODEL.md`
   - [ ] Execute live end-to-end verification against target ShadowSlayers Discord server
+
+## Phase 0.3 – ShadowSlayers Technical Corrections & Verification
+- **Goals**: Address technical issues identified across CI/package management, Discord slash command option schemas, database architecture with production Firestore, elimination of offline false-success pathways, security & authorization hardening, and comprehensive documentation.
+- **Verification Gates**:
+  - [x] Implemented (directly on `main`)
+  - [x] Automated Tests Passed (21/21 automated unit & integration test suites passed in `tests/platform.test.ts` and `tests/firestore-adapter.test.ts`)
+  - [ ] Live Discord Test Passed (Requires live `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID` against live Discord guild; offline simulated guards verified)
+  - [ ] Live Cloud Firestore Verified (Requires live `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` on Firebase Spark)
+  - [ ] GitHub Remote Push Executed (Requires user GitHub remote repository configured; sandbox currently has no remote)
+- **Phase 0.3 Checklist (7/10 completed — 70.0%)**:
+  - [x] **Problem A (npm & CI)**: Generated and committed valid `package-lock.json` matching `package.json`, verified `npm ci` installs cleanly, eliminated peer dependency conflicts with `esbuild`, created automated `scripts/security-check.cjs`, ensured 0 AI packages exist, and enhanced `.github/workflows/ci.yml` (npm ci, security:check, audit, lint, test, build).
+  - [x] **Problem B (Real Discord Slash Command Options)**: Centralized complete Discord slash command schemas with real Discord.js options (`StringOption`, `IntegerOption`, `UserOption`, `ChannelOption`, `BooleanOption`), min/max constraints, choices, required-before-optional ordering, subcommands (`onboarding status`/`onboarding active_player`, `permissions matrix`/`permissions preview`, `roles list`/`roles publish`, `automod status`/`automod test`), recursive interaction option extraction (`extractDiscordInteractionArgs`), argument validation before side effects, and SHA-256 hash-cached command registration.
+  - [x] **Problem C (Firestore & Database Architecture)**: Implemented server-side `FirestoreDatabaseAdapter` via Firebase Admin SDK (`firebase-admin`) supporting guild isolation under `guilds/{guildId}` with subcollections `logs` and `scheduledTasks`, atomic transactions, per-guild async locks, transient error retries with backoff, fatal error surfacing, and v1->v3 schema migration. Explicitly throws on missing Firestore credentials and unimplemented `supabase`; warns if running `local` JSON in production.
+  - [x] **Problem D (Elimination of False Success Paths)**: Require active Discord Gateway connection and confirmed Discord API response before persisting `rulesPublishedAt`, `panel.published`, language channel creation (`channelsCreated`), onboarding role grants (`✅ Verified`, `🌱 Recruit`), `/language` role updates, and moderation actions (`warn`, `timeout`, `kick`, `ban`, `tempban`, `purge`, `slowmode`, `lock`, `unlock`, `unban`). Returns HTTP 503/502 with preserved prior DB state and audit logging of failed attempts.
+  - [x] **Problem E (Security & Role Handling Audit)**: Stopped defaulting unranked or unknown members to `'🌱 Recruit'` (assigned `null` with 0 permissions); sanitized HTML in `/auth/callback` 403 error bodies (`escapeHtml`) to prevent reflected XSS; dynamically re-verifies `discord_oauth` sessions against live/persisted Discord roles (`revalidateDiscordOAuthSession`); validated `:guildId` route parameters with `safeIdSchema`. Authored `walkthrough.md` with PoC verifications.
+  - [x] **Problem F (Documentation & Roadmap)**: Updated `ROADMAP.md`, `AI_WORKFLOW.md`, and all 10 `docs/*.md` files truthfully, clearly distinguishing automated mocked tests from live Discord Gateway / live Cloud Firestore tests.
+  - [x] **Automated Test Suite**: Verified 21/21 test suites passing locally via `npm test`, `npm run lint` (`tsc --noEmit`), `npm run security:check`, and `npm audit --audit-level=high`.
+  - [ ] **Live Discord Gateway Verification**: Blocked in current environment without user-provided Discord Bot credentials.
+  - [ ] **Live Cloud Firestore Verification**: Blocked in current environment without user-provided Firebase Admin service account keys.
+  - [ ] **GitHub Remote Push**: Blocked in current environment without user-configured GitHub remote origin.
+
 
 ## Phase 1 – Discord Core
 - **Goals**: Build a single, centralized Discord Gateway client in Node.js for Lunafy hosting with automatic recovery and slash-command registration.

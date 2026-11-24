@@ -2,6 +2,14 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+export interface FirebaseAdminConfig {
+  projectId: string;
+  clientEmail: string;
+  privateKey: string;
+}
+
+export type DiscordCommandScope = 'auto' | 'guild' | 'global';
+
 export interface RuntimeEnv {
   port: number;
   appUrl: string;
@@ -10,18 +18,24 @@ export interface RuntimeEnv {
   discordClientId: string;
   discordClientSecret: string;
   discordGuildId: string;
+  discordCommandScope: DiscordCommandScope;
   adminPasscode: string;
   adminDiscordUserIds: string[];
   allowedOrigins: string[];
   sessionSecret: string;
   databaseAdapter: 'local' | 'firestore' | 'supabase';
   localDbPath: string;
+  firebase: FirebaseAdminConfig | null;
 }
 
 export function loadEnv(): RuntimeEnv {
   const adapterRaw = (process.env.DATABASE_ADAPTER || 'local').toLowerCase();
   const databaseAdapter: RuntimeEnv['databaseAdapter'] =
     adapterRaw === 'firestore' || adapterRaw === 'supabase' ? adapterRaw : 'local';
+
+  const scopeRaw = (process.env.DISCORD_COMMAND_SCOPE || 'auto').toLowerCase();
+  const discordCommandScope: RuntimeEnv['discordCommandScope'] =
+    scopeRaw === 'guild' || scopeRaw === 'global' ? scopeRaw : 'auto';
 
   const appUrl = (process.env.APP_URL || 'http://localhost:3000').replace(/\/+$/, '');
   const extraOrigins = (process.env.ALLOWED_ORIGINS || '')
@@ -34,6 +48,12 @@ export function loadEnv(): RuntimeEnv {
     .map((id) => id.trim())
     .filter(Boolean);
 
+  const projectId = (process.env.FIREBASE_PROJECT_ID || '').trim();
+  const clientEmail = (process.env.FIREBASE_CLIENT_EMAIL || '').trim();
+  const privateKey = (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
+  const firebase: FirebaseAdminConfig | null =
+    projectId && clientEmail && privateKey ? { projectId, clientEmail, privateKey } : null;
+
   return {
     port: Number(process.env.PORT || 3000),
     appUrl,
@@ -42,11 +62,13 @@ export function loadEnv(): RuntimeEnv {
     discordClientId: process.env.DISCORD_CLIENT_ID || '',
     discordClientSecret: process.env.DISCORD_CLIENT_SECRET || '',
     discordGuildId: process.env.DISCORD_GUILD_ID || 'shadowslayers-primary',
+    discordCommandScope,
     adminPasscode: process.env.ADMIN_PASSCODE || '',
     adminDiscordUserIds,
     allowedOrigins: Array.from(new Set([appUrl, 'http://localhost:3000', 'http://127.0.0.1:3000', ...extraOrigins])),
     sessionSecret: process.env.SESSION_SECRET || '',
     databaseAdapter,
     localDbPath: process.env.LOCAL_DB_PATH || '.data/shadowslayers-db.json',
+    firebase,
   };
 }

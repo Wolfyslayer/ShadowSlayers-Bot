@@ -12,3 +12,5 @@ firebase-applet-config.json
 serviceAccountKey*.json
 *.pem
 *.key
+.aistudio/
+

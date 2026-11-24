@@ -39,3 +39,20 @@ Before any setup operation runs, `apps/bot/src/services/discovery.ts` scans the 
 1. Matches all 9 legacy categories (`📜 01 — GATE OF SHADOWS` through `🏰 09 — CLAN VOICE`), 32 legacy text channels, 5 voice channels, uncategorized channels, and permission overwrites, while tracking optional extension channels (`📜・audit-logs`, `💡・suggestions`) separately.
 2. Maps all 16 legacy roles (`👑 Shadow King` through `✅ Verified`) using exact match or single controlled alias, blocking automatic selection on ambiguous candidates (`conflicting`), and keeping `👑 Shadow King` manual-only (`excludeFromAutoSetup: true`).
 3. Reports misplaced channels (`incorrectPlacements`), channel type mismatches (`incorrectTypes`), and permission drifts (`permissionDifferences`) without deleting, renaming, moving, or overwriting existing Discord resources. Only verified Discord API creations transition to `applied`. See `docs/LEGACY_COMPATIBILITY_AUDIT.md` and `docs/SETUP_MANAGER.md`.
+
+## 4. Database Adapter & Concurrency Model (Phase 0.3)
+- **`FirestoreDatabaseAdapter` (`packages/database/src/firestore-adapter.ts`)**:
+  - Implemented via official Node.js Firebase Admin SDK (`firebase-admin`) for production Lunafy hosting.
+  - Server-side only: uses service account credentials (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`). Never exposes keys to browser code.
+  - Guild isolation: root metadata stored in `shadowslayers_meta/root`, while each guild resides in `guilds/{guildId}`.
+  - Subcollection isolation: high-frequency `logs` (`guilds/{guildId}/logs`) and dynamic `scheduledTasks` (`guilds/{guildId}/scheduledTasks`) are separated from the main guild document to prevent 1MB Firestore document limits and contention.
+  - Concurrency safety: atomic Firestore transactions combined with per-guild in-memory asynchronous execution locks prevent race conditions where parallel operations (e.g., task status transitions and guild profile updates) could clobber each other.
+  - Resiliency: automatic exponential backoff retries transient failures (`unavailable`, `deadline-exceeded`, `aborted`, `resource-exhausted`). Fatal credential/permission errors are immediately surfaced.
+  - Explicit non-fallback: running with `DATABASE_ADAPTER=firestore` without credentials aborts startup. Running `DATABASE_ADAPTER=supabase` explicitly aborts as an unimplemented future adapter.
+
+## 5. Discord Command & Interaction Pipeline (Phase 0.3)
+- Complete Discord.js REST schemas (`buildDiscordSlashCommandsJson`) register typed Discord options (`String`, `Integer`, `User`, `Channel`, `Boolean`) with choices, min/max bounds, and required-before-optional parameter order.
+- Top-level commands with multiple actions are structured into subcommands (`onboarding status`/`onboarding active_player`, `permissions matrix`/`permissions preview`, `roles list`/`roles publish`, `automod status`/`automod test`).
+- Gateway interaction extraction (`extractDiscordInteractionArgs`) recursively flattens subcommands and extracts Discord snowflake IDs alongside display usernames.
+- SHA-256 command payload hashing prevents redundant Discord REST API rate-limit exhaustion during bot startup.
+

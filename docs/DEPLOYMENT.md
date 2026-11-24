@@ -32,4 +32,25 @@ In Discord Developer Portal -> OAuth2 -> Redirects, add:
 ## 5. Firebase Spark Setup (When Self-Hosted)
 1. Enable Cloud Firestore on Firebase Spark (free tier).
 2. Deploy `database/firestore.rules.template` as `firestore.rules` via `firebase deploy --only firestore:rules`.
-3. Provide server-side Firebase credentials via `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY` in Lunafy environment variables.
+3. Generate a service account key in Firebase Console (Project Settings -> Service Accounts -> Generate new private key).
+4. Provide credentials to the Lunafy environment via:
+   - `FIREBASE_PROJECT_ID=your-project-id`
+   - `FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxx@your-project-id.iam.gserviceaccount.com`
+   - `FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"`
+5. Set `DATABASE_ADAPTER=firestore`.
+
+## 6. Command Registration Scope
+- `DISCORD_COMMAND_SCOPE="auto"` (default): Registers guild commands instantly if `DISCORD_GUILD_ID` is numeric snowflake, else global.
+- `DISCORD_COMMAND_SCOPE="guild"`: Forces immediate guild-scoped slash command registration.
+- `DISCORD_COMMAND_SCOPE="global"`: Registers global commands across all guilds (may take up to 1 hour to propagate on Discord's edge cache).
+
+## 7. CI Pipeline Discipline
+- `.github/workflows/ci.yml` strictly runs `npm ci` using the committed `package-lock.json`.
+- The pipeline executes:
+  1. `npm ci` (exact dependency tree installation)
+  2. `npm run security:check` (AI hygiene, secret leak checks, role integrity)
+  3. `npm audit --audit-level=high` (dependency security audit)
+  4. `npm run lint` (`tsc --noEmit` typecheck)
+  5. `npm test` (unit and integration tests)
+  6. `npm run build` (production Vite dashboard bundle)
+

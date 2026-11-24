@@ -160,7 +160,7 @@ export interface SetupInteractionContext {
   guildId: string;
   actorUserId: string;
   actorUsername: string;
-  actorRank: ClanRankName;
+  actorRank: ClanRankName | null;
   discordGuild: GuildLike;
   db: DatabaseAdapter;
 }
@@ -196,7 +196,7 @@ export async function handleSetupButtonAction(
     return {
       ok: false,
       ephemeral: true,
-      content: `Permission denied: your current clan rank (${ctx.actorRank}) is no longer authorized to apply server setup.`,
+      content: `Permission denied: your current clan rank (${ctx.actorRank ?? 'Unranked'}) is no longer authorized to apply server setup.`,
     };
   }
 
@@ -310,7 +310,7 @@ export async function handleLiveSlashSetup(
   if (!hasCapability(ctx.actorRank, 'discovery.apply')) {
     await interaction.reply({
       ephemeral: true,
-      content: `Permission denied: your rank (${ctx.actorRank}) cannot execute /setup.`,
+      content: `Permission denied: your rank (${ctx.actorRank ?? 'Unranked'}) cannot execute /setup.`,
     });
     return;
   }
