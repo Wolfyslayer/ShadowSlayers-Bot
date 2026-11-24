@@ -603,14 +603,14 @@ export interface GameDefinition {
   name: string;
   shortCode: string;
   active: boolean;
+  ranks?: string[];
 }
 
 export interface GamingClassDef {
   id: string;
   gameId: string;
   name: string;
-  element: 'Fire' | 'Water' | 'Storm' | 'Earth' | 'Shadow' | 'Light';
-  roleArchetype: 'Tank' | 'Damage' | 'Support' | 'Control';
+  roleArchetype?: string;
 }
 
 export interface ClanTeam {

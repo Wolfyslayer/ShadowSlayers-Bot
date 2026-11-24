@@ -73,40 +73,41 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onAuthenticated }) => {
   };
 
   return (
-    <div className="min-h-screen bg-[#0B0D12] text-slate-100 flex items-center justify-center p-4 sm:p-8">
-      <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-2 border border-slate-800 bg-[#121620] rounded-2xl overflow-hidden shadow-2xl shadow-black/30">
-        <div className="relative min-h-[260px] lg:min-h-[520px] bg-[#0E1119] border-b lg:border-b-0 lg:border-r border-slate-800 flex flex-col justify-between p-8">
+    <div className="relative isolate flex min-h-screen items-center justify-center overflow-hidden bg-[#090812] p-4 text-slate-100 sm:p-8">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_18%_8%,rgba(139,53,245,0.2),transparent_38%),radial-gradient(ellipse_at_90%_88%,rgba(139,53,245,0.12),transparent_36%)]" />
+      <div className="app-panel relative grid w-full max-w-5xl grid-cols-1 overflow-hidden border border-white/10 shadow-[0_30px_100px_rgba(0,0,0,0.55)] lg:grid-cols-2">
+        <div className="relative flex min-h-[280px] flex-col justify-between border-b border-white/10 bg-[#0E0B18] p-7 sm:p-9 lg:min-h-[580px] lg:border-b-0 lg:border-r">
           <img
             src={bannerUrl}
-            alt="ShadowSlayers Obsidian Sanctum"
+            alt="ShadowSlayers community banner"
             referrerPolicy="no-referrer"
-            className="absolute inset-0 w-full h-full object-cover opacity-35"
+            className="absolute inset-0 h-full w-full object-cover opacity-35"
           />
-          <div className="absolute inset-0 bg-gradient-to-t from-[#0B0D12] via-[#0B0D12]/60 to-[#0B0D12]/40" />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#090812] via-[#090812]/65 to-[#090812]/35" />
 
           <div className="relative z-10 flex items-center gap-4">
             <img
               src={guildCrestUrl}
-              alt="ShadowSlayers Guild Crest"
+              alt="ShadowSlayers icon"
               referrerPolicy="no-referrer"
-              className="w-14 h-14 rounded-lg object-cover border border-amber-500/40"
+              className="h-14 w-14 rounded-xl border border-violet-300/30 object-cover shadow-lg shadow-violet-950/40"
             />
             <div>
-              <h1 className="font-display text-xl font-bold tracking-wide text-slate-100">
+              <h1 className="font-display text-xl font-bold tracking-wide text-white">
                 ShadowSlayers
               </h1>
-              <p className="text-xs text-violet-300">{t('Legends of Elements Administration')}</p>
+              <p className="text-xs text-violet-200">{t('Independent Discord Community Management')}</p>
             </div>
           </div>
 
-          <div className="relative z-10 space-y-3 mt-12">
-            <h2 className="font-display text-2xl font-semibold text-slate-100 leading-snug text-balance">
+          <div className="relative z-10 mt-12 space-y-3">
+            <h2 className="font-display text-balance text-2xl font-semibold leading-snug text-white">
               {t('Centralized Guild & Discord Governance')}
             </h2>
-            <p className="text-sm text-slate-300 leading-relaxed">
+            <p className="text-sm leading-relaxed text-slate-300">
               {t('Non-destructive server discovery, dynamic multilingual realm management, deterministic AutoMod, moderation cases, tickets, and clan raid operations.')}
             </p>
-            <div className="pt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
+            <div className="flex flex-wrap gap-x-3 gap-y-1 pt-2 text-xs text-slate-400">
               <span>{t('Zero AI Dependencies')}</span>
               <span aria-hidden="true">·</span>
               <span>{t('Server-Verified Sessions')}</span>
@@ -116,14 +117,14 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onAuthenticated }) => {
           </div>
         </div>
 
-        <div className="p-8 flex flex-col justify-center">
-          <div className="mb-6">
-            <div className="flex items-center gap-2 text-amber-400 text-xs font-medium mb-2">
-              <Shield className="w-4 h-4" />
+        <div className="flex flex-col justify-center bg-[#100e1a]/80 p-7 sm:p-10">
+          <div className="mb-7">
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-violet-300/20 bg-violet-400/[0.08] px-3 py-1.5 text-xs font-medium text-violet-100">
+              <Shield className="h-4 w-4 text-violet-300" />
               <span>{t('Inner Sanctum Authentication')}</span>
             </div>
-            <h3 className="font-display text-xl font-semibold text-slate-100">{t('Sign In to Dashboard')}</h3>
-            <p className="text-sm text-slate-400 mt-1">
+            <h3 className="font-display text-2xl font-semibold text-white">{t('Sign In to Dashboard')}</h3>
+            <p className="mt-2 text-sm leading-relaxed text-slate-400">
               {t('Sign in with Discord to access servers where you are the owner or have Administrator or Manage Server permissions.')}
             </p>
           </div>
@@ -141,11 +142,15 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onAuthenticated }) => {
               type="button"
               onClick={handleDiscordOAuth}
               disabled={!status?.discordOAuthConfigured}
-              className="w-full py-2.5 px-4 rounded-lg border border-slate-700 bg-[#171C28] hover:bg-[#1E2535] disabled:opacity-50 disabled:cursor-not-allowed text-slate-200 text-sm font-medium transition-colors cursor-pointer"
+              className="group relative flex w-full items-center justify-center gap-3 overflow-hidden rounded-xl border border-violet-200/25 bg-gradient-to-r from-[#8b35f5] to-[#6729c8] px-4 py-3.5 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(112,37,211,0.28)] transition duration-200 hover:-translate-y-0.5 hover:from-[#9c53f7] hover:to-[#7737d3] hover:shadow-[0_16px_34px_rgba(112,37,211,0.38)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-200 disabled:translate-y-0 disabled:cursor-not-allowed disabled:opacity-55 disabled:shadow-none"
             >
-              {status.discordOAuthConfigured ? t('Continue with Discord') : t('Discord sign-in is not configured')}
+              <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M19.73 5.12A18.4 18.4 0 0 0 15.2 3.7l-.56 1.14a16.8 16.8 0 0 0-5.28 0L8.8 3.7a18.4 18.4 0 0 0-4.53 1.42C1.4 9.35.62 13.48 1 17.56a18.6 18.6 0 0 0 5.55 2.82l1.2-1.96c-.66-.24-1.28-.55-1.87-.9l.46-.36c3.6 1.67 7.5 1.67 11.06 0l.47.36c-.59.35-1.21.66-1.88.9l1.2 1.96a18.5 18.5 0 0 0 5.55-2.82c.45-4.74-.77-8.83-3.01-12.44ZM8.1 14.76c-1.08 0-1.96-.98-1.96-2.19s.86-2.2 1.96-2.2c1.1 0 1.98.99 1.96 2.2 0 1.21-.86 2.19-1.96 2.19Zm7.8 0c-1.08 0-1.96-.98-1.96-2.19s.86-2.2 1.96-2.2c1.1 0 1.98.99 1.96 2.2 0 1.21-.86 2.19-1.96 2.19Z" />
+              </svg>
+              <span>{status.discordOAuthConfigured ? t('Continue with Discord') : t('Discord sign-in is not configured')}</span>
             </button>
           )}
+          <p className="mt-4 text-center text-xs text-slate-500">{t('Your Discord permissions are verified before server access is granted.')}</p>
         </div>
       </div>
     </div>

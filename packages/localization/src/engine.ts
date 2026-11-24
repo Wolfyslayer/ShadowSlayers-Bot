@@ -5,9 +5,9 @@ import type {
 } from '../../shared/src/types.ts';
 
 export const BASE_TRANSLATION_KEYS: Record<string, string> = {
-  'onboarding.welcome_title': 'Welcome to ShadowSlayers – Legends of Elements',
+  'onboarding.welcome_title': 'Welcome to ShadowSlayers',
   'onboarding.welcome_body':
-    'Step past the Gate of Shadows. Read the realm rules, accept the covenant, and choose your languages and elemental class.',
+    'Read the community rules, choose your languages, and set up your server roles.',
   'onboarding.rules_accept_button': 'Accept Rules & Verify',
   'onboarding.verified_success': 'You have been granted the ✅ Verified role and access to the Common Hall.',
   'onboarding.language_prompt': 'Select one or more languages to unlock your Language Realms:',
@@ -22,13 +22,13 @@ export const BASE_TRANSLATION_KEYS: Record<string, string> = {
   'tickets.closed': 'Ticket #{ticketNumber} has been closed and archived.',
   'recruitment.submitted': 'Your application has been submitted for council review.',
   'recruitment.approved': 'Congratulations! Your application has been approved.',
-  'clan.raid_reminder': 'Raid assembly begins soon. Confirm attendance in the Legends of Elements hall.',
+  'clan.raid_reminder': 'The scheduled game event begins soon. Confirm your attendance.',
 };
 
 export const RUSSIAN_TRANSLATIONS: Record<string, string> = {
-  'onboarding.welcome_title': 'Добро пожаловать в ShadowSlayers – Legends of Elements',
+  'onboarding.welcome_title': 'Добро пожаловать в ShadowSlayers',
   'onboarding.welcome_body':
-    'Пройдите через Врата Теней. Ознакомьтесь с правилами, примите устав и выберите языки и класс стихий.',
+    'Ознакомьтесь с правилами сообщества, выберите языки и настройте роли сервера.',
   'onboarding.rules_accept_button': 'Принять правила и подтвердить',
   'onboarding.verified_success': 'Вам выдана роль ✅ Verified и открыт доступ в Общий зал.',
   'onboarding.language_prompt': 'Выберите один или несколько языков для доступа к языковым разделам:',
@@ -43,7 +43,7 @@ export const RUSSIAN_TRANSLATIONS: Record<string, string> = {
   'tickets.closed': 'Тикет #{ticketNumber} закрыт и сохранён в архив.',
   'recruitment.submitted': 'Ваша заявка отправлена на рассмотрение совета.',
   'recruitment.approved': 'Поздравляем! Ваша заявка одобрена.',
-  'clan.raid_reminder': 'Скоро сбор в рейд. Подтвердите участие в зале Legends of Elements.',
+  'clan.raid_reminder': 'Скоро начнётся запланированное игровое событие. Подтвердите участие.',
 };
 
 export const DEFAULT_CHANNEL_TEMPLATES: LanguageChannelTemplate[] = [

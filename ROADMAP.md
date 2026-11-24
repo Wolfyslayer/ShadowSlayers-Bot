@@ -1,4 +1,4 @@
-# ShadowSlayers – Legends of Elements: Master Roadmap
+# ShadowSlayers Bot: Master Roadmap
 
 > **Scope Policy**: This platform contains **zero AI functionality**. All moderation, AutoMod, localization, onboarding, and administration features operate deterministically via rule engines, explicit templates, and manual administrator review.
 

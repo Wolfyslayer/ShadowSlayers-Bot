@@ -867,8 +867,8 @@ export async function executeSlashCommand(
     case 'about':
       return {
         ok: true,
-        title: 'ShadowSlayers – Legends of Elements',
-        message: 'Deterministic multi-realm Discord administration platform. Zero AI dependencies. Hosted on Lunafy + Firebase Spark / Local Adapter.',
+        title: 'ShadowSlayers Bot',
+        message: 'Independent Discord community administration with multi-server support and configurable game catalogs.',
         data: {
           categoriesDiscovered: guild.discovery.categories.length,
           rolesDiscovered: guild.discovery.roles.length,
@@ -1812,12 +1812,20 @@ export async function executeSlashCommand(
         return { ok: false, title: 'Missing Title', message: 'Provide an event title.' };
       }
       const eventType = (getStringArg(ctx.args, 'type') || 'raid') as 'raid' | 'dungeon' | 'community' | 'tournament';
+      const validEventType = ['raid', 'dungeon', 'community', 'tournament'].includes(eventType);
+      if (!validEventType) {
+        return { ok: false, title: 'Invalid Event Type', message: 'Choose raid, dungeon, community, or tournament.' };
+      }
+      const gameId = guild.games[0]?.id ?? '';
+      if ((eventType === 'raid' || eventType === 'dungeon') && !gameId) {
+        return { ok: false, title: 'No Game Configured', message: 'Add a game in the dashboard before scheduling a raid or dungeon.' };
+      }
       guild.events.unshift({
         id: `event-${Date.now()}`,
         title,
         description: 'Scheduled via /event command.',
-        eventType: ['raid', 'dungeon', 'community', 'tournament'].includes(eventType) ? eventType : 'raid',
-        gameId: guild.games[0]?.id || 'game-loe',
+        eventType,
+        gameId,
         hostName: ctx.actorUsername,
         startsAt: new Date(Date.now() + 86400_000).toISOString(),
         maxParticipants: 10,
@@ -1949,7 +1957,7 @@ export async function executeSlashCommand(
       return {
         ok: true,
         title: 'ShadowSlayers Clan Overview',
-        message: `${guild.teams.length} active squad(s) · ${guild.raidSchedules.length} scheduled raid(s) · ${guild.gamingClasses.length} elemental classes`,
+        message: `${guild.teams.length} active squad(s) · ${guild.raidSchedules.length} scheduled raid(s) · ${guild.gamingClasses.length} game classes`,
       };
 
     case 'members': {

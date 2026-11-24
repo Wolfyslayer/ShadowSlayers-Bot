@@ -24,7 +24,7 @@
 | :--- | :---: | :--- |
 | **Roles** | **16** | 6 Clan Hierarchy (`👑 Shadow King`, `🛡️ Shadow Council`, `⚔️ Warlord`, `🔥 Elite Warrior`, `🖤 ShadowSlayer`, `🌱 Recruit`), 3 Classes (`⚔️ Warrior`, `🔮 Sorcerer`, `🗡️ Swordsman`), 3 Notifications (`📢 Event Pings`, `🐉 Boss Pings`, `🏆 PvP Pings`), 2 Languages (`🇬🇧 English`, `🇷🇺 Русский`), 2 System/Verification (`🤖 Bots`, `✅ Verified`) |
 | **Categories** | **9** | `📜 01 — GATE OF SHADOWS` through `🏰 09 — CLAN VOICE` |
-| **Text Channels** | **32** | 6 Gate + 5 Common Hall + 2 Language Realms + 6 Legends of Elements + 3 Class Halls + 6 ShadowSlayers + 4 Inner Sanctum |
+| **Text Channels** | **32** | 6 Gate + 5 Common Hall + 2 Language Realms + 6 Game Hub + 3 Class Halls + 6 ShadowSlayers + 4 Inner Sanctum |
 | **Voice Channels** | **5** | 4 in `🔊 08 — VOICE CHAMBERS` + 1 in `🏰 09 — CLAN VOICE` |
 | **Optional Extensions** | **2** (strictly separated) | `📜・audit-logs`, `💡・suggestions` — stored in `OPTIONAL_EXTENSION_CHANNELS` / `discovery.optionalChannels`, never mixed into canonical legacy counts |
 

@@ -1,6 +1,6 @@
 rules_version = '2';
 
-// ShadowSlayers - Legends of Elements
+// ShadowSlayers Bot
 // Production Firestore Security Rules Template (Firebase Spark)
 // Note: Trusted Node.js bot runtime uses Admin SDK; browser dashboard reads/writes only permitted admin paths.
 

@@ -1,4 +1,4 @@
-# Legacy Server Specification — ShadowSlayers | Legends of Elements
+# Legacy Server Specification — ShadowSlayers Bot Community Template
 
 This document records the canonical **16 roles**, **9 categories**, **32 text channels**, and **5 voice channels** reconstructed from the Phase 0.2 specification.
 
@@ -58,7 +58,7 @@ Order from highest authority to entry rank:
 - `🇬🇧・english-chat` (`🇬🇧 English` + `✅ Verified`)
 - `🇷🇺・русский-чат` (`🇷🇺 Русский` + `✅ Verified`)
 
-### 4. `⚔️ 04 — LEGENDS OF ELEMENTS` (6 Text)
+### 4. `🎮 04 — GAME HUB` (6 Text)
 - `🎮・game-discussion`
 - `📖・guides-and-tips`
 - `📈・game-progression`

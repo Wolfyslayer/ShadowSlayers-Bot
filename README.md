@@ -1,6 +1,10 @@
-# ShadowSlayers – Legends of Elements
+# ShadowSlayers Bot
 
 Discord bot, trusted administration API, and static React dashboard backed by Firestore. The bot, API, and dashboard have separate entry points; the bot host runs no HTTP listener or frontend runtime.
+
+ShadowSlayers Bot is an independent community project and is not affiliated with or endorsed by any game publisher. Game names, ranks, and classes are configured by each server administrator; all game trademarks belong to their respective owners.
+
+The game catalog starts empty. Server administrators can add games and configure each game's rank and class labels in the Clan dashboard. These game settings are separate from the bot's staff permission hierarchy.
 
 ## Local development (Windows PowerShell)
 

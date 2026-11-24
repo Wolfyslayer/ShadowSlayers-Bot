@@ -772,6 +772,14 @@ export default function App() {
                     });
                     await refreshState();
                   }}
+                  onUpdateGame={async (gameId, patch) => {
+                    await apiRequest(`/api/guild/${guildId}/clan/games/${gameId}`, {
+                      method: 'PATCH',
+                      token,
+                      body: patch,
+                    });
+                    await refreshState();
+                  }}
                   onCreateTeam={async (name, gameId, description, maxSize) => {
                     await apiRequest(`/api/guild/${guildId}/clan/teams`, {
                       method: 'POST',

@@ -33,6 +33,7 @@ import { evaluateXpAward } from '../apps/bot/src/services/xp.ts';
 import { migrateDatabaseRoot } from '../database/schema-migrations.ts';
 import { LocalPersistentAdapter, createDatabaseAdapter } from '../packages/database/src/adapter.ts';
 import { createInitialGuildSeed } from '../packages/database/src/seed.ts';
+import { normalizeGameLabels } from '../packages/shared/src/game-config.ts';
 import {
   BASE_TRANSLATION_KEYS,
   calculateCompleteness,
@@ -85,7 +86,7 @@ function createMockDiscordGuild(opts?: {
 
   return {
     id: 'guild-mock-1',
-    name: 'ShadowSlayers | Legends of Elements',
+    name: 'ShadowSlayers Community',
     roles: {
       cache: roleMap,
       fetch: async () => roleMap,
@@ -146,6 +147,19 @@ function createMockDiscordGuild(opts?: {
     },
   };
 }
+
+test('Game catalog defaults empty and validates editable game rank/class labels', () => {
+  const seed = createInitialGuildSeed();
+  assert.equal(seed.guildName, 'ShadowSlayers');
+  assert.deepEqual(seed.games, []);
+  assert.deepEqual(seed.gamingClasses, []);
+  assert.deepEqual(seed.teams, []);
+  assert.deepEqual(seed.raidSchedules, []);
+  assert.deepEqual(normalizeGameLabels([' Bronze ', 'Silver']), ['Bronze', 'Silver']);
+  assert.equal(normalizeGameLabels(['Gold', ' gold ']), null);
+  assert.equal(normalizeGameLabels(['']), null);
+  assert.equal(normalizeGameLabels(Array.from({ length: 51 }, (_, index) => `Rank ${index}`)), null);
+});
 
 test('Canonical Phase 0.2 template preserves exact 16 roles, 9 categories, 32 text channels, 5 voice channels, and null unknown properties', () => {
   assert.equal(LEGACY_ROLE_SPECS.length, 16);

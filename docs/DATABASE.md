@@ -1,4 +1,4 @@
-# Database Architecture – ShadowSlayers – Legends of Elements
+# Database Architecture – ShadowSlayers Bot
 
 ## 1. Abstraction Strategy (Firestore First, No Silent Fallback)
 All application modules read and write through the `DatabaseAdapter` interface in `packages/database/src/adapter.ts`.
@@ -29,7 +29,7 @@ All collections enforce server-level isolation via `guildId` and consistent ISO-
 16. `polls` — Question, options, vote counts, expiry
 17. `giveaways` — Prize, winner count, entrants, winner IDs, end timestamp
 18. `events` — Community & gaming events, RSVPs
-19. `clanConfig` — Game-agnostic game definitions, gaming classes, hierarchy labels
+19. `clanConfig` — Admin-configured game catalog, ordered game-rank labels, game-specific classes, and the separate bot rank hierarchy
 20. `teams` — Clan squads, leaders, member rosters, raid/dungeon schedules, attendance records
 21. `achievements` — Unlockable badges & criteria
 22. `scheduledTasks` — Persistent idempotent task queue (`tempban_expiry`, `temprole_expiry`, `reminder`, `giveaway_draw`, `event_notify`, `birthday`, `scheduled_announcement`, `log_cleanup`, `inactivity_report`)
@@ -59,6 +59,8 @@ All collections enforce server-level isolation via `guildId` and consistent ISO-
 - **Non-Fallback Policy**:
   - If `DATABASE_ADAPTER=firestore` is configured but credentials are missing, production startup throws an explicit fatal error (`Silent fallback to local JSON storage is forbidden in production`).
   - Setting `DATABASE_ADAPTER=supabase` throws an explicit startup error indicating that Supabase is an unimplemented future adapter.
+
+Game catalogs start empty. Server administrators with `clan.manage` can add games and configure each game's rank and class labels. Those game-specific labels are configuration data only and never grant bot permissions; bot authorization continues to use the independent clan hierarchy and Discord permission checks.
 
 ## 5. API-to-Bot Control Queue
 - The bot is the only process that owns a Discord Gateway. The API validates the authenticated user's guild and capability before signing and enqueueing a typed command in Firestore.

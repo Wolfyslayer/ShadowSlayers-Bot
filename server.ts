@@ -36,6 +36,7 @@ import {
   signBotControlCommand,
   verifyBotControlResult,
 } from './packages/shared/src/bot-control-signature.ts';
+import { normalizeGameLabels } from './packages/shared/src/game-config.ts';
 import {
   appealReviewSchema,
   automodUpdateSchema,
@@ -483,7 +484,7 @@ async function bootstrap() {
     const guildIds = await db.listGuildIds();
     res.json({
       ok: true,
-      service: 'ShadowSlayers – Legends of Elements',
+      service: 'ShadowSlayers Discord Bot',
       databaseAdapter: db.driverName,
       bot: await getPublicBotRuntimeStatus(),
       guildCount: guildIds.length,
@@ -2135,12 +2136,27 @@ async function bootstrap() {
       res.status(400).json({ error: 'Event title is required.' });
       return;
     }
+    const rawEventType = String(req.body?.eventType || 'community');
+    if (!['raid', 'dungeon', 'community', 'tournament'].includes(rawEventType)) {
+      res.status(400).json({ error: 'Choose a valid event type.' });
+      return;
+    }
+    const eventType = rawEventType as 'raid' | 'dungeon' | 'community' | 'tournament';
+    const gameId = String(req.body?.gameId || '');
+    if (gameId && !guild.games.some((game) => game.id === gameId)) {
+      res.status(400).json({ error: 'Select a configured game for this event.' });
+      return;
+    }
+    if ((eventType === 'raid' || eventType === 'dungeon') && !gameId) {
+      res.status(400).json({ error: 'Add a game before scheduling a raid or dungeon.' });
+      return;
+    }
     const ev = {
       id: `event-${Date.now()}`,
       title,
       description,
-      eventType: (req.body?.eventType || 'community') as 'raid' | 'dungeon' | 'community' | 'tournament',
-      gameId: String(req.body?.gameId || guild.games[0]?.id || 'game-loe'),
+      eventType,
+      gameId,
       hostName: req.sessionUser!.username,
       startsAt: String(req.body?.startsAt || new Date(Date.now() + 86400_000).toISOString()),
       maxParticipants: req.body?.maxParticipants ? Number(req.body.maxParticipants) : null,
@@ -2210,10 +2226,59 @@ async function bootstrap() {
       res.status(400).json({ error: 'Game name and short code are required.' });
       return;
     }
-    const game = { id: `game-${Date.now()}`, name, shortCode, active: true };
+    if (name.length > 80 || shortCode.length > 12) {
+      res.status(400).json({ error: 'Game name must be at most 80 characters and code at most 12.' });
+      return;
+    }
+    if (guild.games.some((item) => item.name.toLowerCase() === name.toLowerCase() || item.shortCode.toLowerCase() === shortCode.toLowerCase())) {
+      res.status(409).json({ error: 'A game with that name or code already exists.' });
+      return;
+    }
+    const game = { id: `game-${Date.now()}`, name, shortCode, active: true, ranks: [] };
     guild.games.push(game);
     await db.saveGuild(guild);
     res.status(201).json({ game });
+  });
+
+  app.patch('/api/guild/:guildId/clan/games/:gameId', requireAuth('clan.manage'), async (req: AuthenticatedRequest, res) => {
+    const guild = await db.getGuild(req.params.guildId);
+    if (!guild) {
+      res.status(404).json({ error: 'Guild not found' });
+      return;
+    }
+    const game = guild.games.find((item) => item.id === req.params.gameId);
+    if (!game) {
+      res.status(404).json({ error: 'Game not found' });
+      return;
+    }
+
+    const hasRanks = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'ranks');
+    const hasClasses = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'classes');
+    if (!hasRanks && !hasClasses) {
+      res.status(400).json({ error: 'Provide game ranks or classes to update.' });
+      return;
+    }
+    const currentClasses = guild.gamingClasses.filter((item) => item.gameId === game.id);
+    const ranks = hasRanks ? normalizeGameLabels(req.body.ranks) : game.ranks ?? [];
+    const classes = hasClasses ? normalizeGameLabels(req.body.classes) : currentClasses.map((item) => item.name);
+    if (!ranks || !classes) {
+      res.status(400).json({ error: 'Game ranks and classes must be unique names of 1–50 characters, with no more than 50 of each.' });
+      return;
+    }
+
+    game.ranks = ranks;
+    if (hasClasses) {
+      const currentByName = new Map(currentClasses.map((item) => [item.name.toLowerCase(), item]));
+      guild.gamingClasses = [
+        ...guild.gamingClasses.filter((item) => item.gameId !== game.id),
+        ...classes.map((name, index) => {
+          const current = currentByName.get(name.toLowerCase());
+          return current ? { ...current, name } : { id: `${game.id}-class-${Date.now()}-${index}`, gameId: game.id, name };
+        }),
+      ];
+    }
+    await db.saveGuild(guild);
+    res.json({ game });
   });
 
   app.post('/api/guild/:guildId/clan/teams', requireAuth('clan.manage'), async (req: AuthenticatedRequest, res) => {
@@ -2224,9 +2289,13 @@ async function bootstrap() {
     }
     const name = String(req.body?.name || '').trim();
     const description = String(req.body?.description || '').trim();
-    const gameId = String(req.body?.gameId || guild.games[0]?.id || 'game-loe');
+    const gameId = String(req.body?.gameId || '');
     if (name.length < 2) {
       res.status(400).json({ error: 'Team name is required.' });
+      return;
+    }
+    if (!guild.games.some((item) => item.id === gameId)) {
+      res.status(400).json({ error: 'Select a configured game before creating a team.' });
       return;
     }
     const team = {
@@ -2252,15 +2321,20 @@ async function bootstrap() {
     }
     const title = String(req.body?.title || '').trim();
     const kind = req.body?.kind === 'dungeon' ? 'dungeon' : 'raid';
+    const gameId = String(req.body?.gameId || '');
     if (title.length < 2) {
       res.status(400).json({ error: 'Raid/Dungeon title is required.' });
+      return;
+    }
+    if (!guild.games.some((item) => item.id === gameId)) {
+      res.status(400).json({ error: 'Select a configured game before scheduling a raid or dungeon.' });
       return;
     }
     const raid = {
       id: `raid-${Date.now()}`,
       title,
       kind: kind as 'raid' | 'dungeon',
-      gameId: String(req.body?.gameId || guild.games[0]?.id || 'game-loe'),
+      gameId,
       teamId: req.body?.teamId ? String(req.body.teamId) : null,
       leaderUsername: req.sessionUser!.username,
       scheduledFor: String(req.body?.scheduledFor || new Date(Date.now() + 86400_000).toISOString()),

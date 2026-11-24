@@ -1,4 +1,4 @@
-# Security Architecture – ShadowSlayers – Legends of Elements
+# Security Architecture – ShadowSlayers Bot
 
 ## 1. Credential & Secret Boundaries
 - **Frontend (GitHub Pages / Vite SPA)**: Zero private secrets. Never contains `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_SECRET`, `FIREBASE_PRIVATE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, or `SESSION_SECRET`.
@@ -33,6 +33,7 @@ Clan rank hierarchy (`👑 Shadow King` > `🛡️ Shadow Council` > `⚔️ War
    - `resolveClanRankFromRoleNames(memberRoles)` matches strictly against canonical clan hierarchy roles (`👑 Shadow King` through `🌱 Recruit`).
    - Members with no clan role (or only holding language/class/notification/verification roles) are assigned `clanRank: null` (never `'🌱 Recruit'`).
    - Members with `clanRank: null` possess 0 clan capabilities and are blocked from executing privileged commands.
+   - Administrator-configured game rank labels are separate descriptive data and never grant bot capabilities.
 2. **Reflected XSS Sanitization in `/auth/callback`**:
    - Error messages returned in 403 HTML denial bodies are sanitized with `escapeHtml(authz.reason)` to prevent script injection.
 3. **Dynamic Discord OAuth2 Session Re-verification (`revalidateDiscordOAuthSession`)**:

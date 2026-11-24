@@ -1,5 +1,5 @@
 /**
- * Immutable Canonical Phase 0.2 Legacy Fixture for ShadowSlayers | Legends of Elements.
+ * Immutable canonical server fixture for ShadowSlayers.
  * Used as an independent regression anchor in automated unit & mocked Discord API tests.
  * (Not a live Discord server test.)
  */
@@ -53,7 +53,7 @@ export const CANONICAL_LEGACY_FIXTURE = deepFreeze({
     '📜 01 — GATE OF SHADOWS',
     '🔥 02 — THE COMMON HALL',
     '🌍 03 — LANGUAGE REALMS',
-    '⚔️ 04 — LEGENDS OF ELEMENTS',
+    '🎮 04 — GAME HUB',
     '🧙 05 — CLASS HALLS',
     '🖤 06 — SHADOWSLAYERS',
     '👑 07 — THE INNER SANCTUM',
@@ -80,7 +80,7 @@ export const CANONICAL_LEGACY_FIXTURE = deepFreeze({
       '🇬🇧・english-chat',
       '🇷🇺・русский-чат',
     ],
-    '⚔️ 04 — LEGENDS OF ELEMENTS': [
+    '🎮 04 — GAME HUB': [
       '🎮・game-discussion',
       '📖・guides-and-tips',
       '📈・game-progression',

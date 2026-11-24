@@ -1,4 +1,4 @@
-# System Modules – ShadowSlayers – Legends of Elements
+# System Modules – ShadowSlayers Bot
 
 ## Runtime Boundaries
 
@@ -18,7 +18,7 @@
 9. **Recruitment** — Multi-category configurable forms, submission queue, and reviewer-attributed approve/reject workflow.
 10. **Tickets & Support** — Numbered private tickets, claim/transfer/close/reopen, transcripts, and feedback.
 11. **Community Suite** — Suggestions, polls, giveaways, events, reminders, birthdays, challenges, inactivity reports, and scheduled announcements.
-12. **Clan & Gaming Management** — Game-agnostic classes, teams/squads, raid & dungeon schedules, and attendance tracking.
+12. **Game & Clan Management** — Game catalogs begin empty; authorized administrators can add games and configure ordered game-rank labels and game-specific classes. These settings never grant bot permissions. Teams/squads, raid & dungeon schedules, and attendance tracking require a configured game.
 13. **Persistent Scheduler (`apps/bot/src/services/scheduler.ts`)** — Crash-safe, idempotent background task runner surviving restarts without duplicate dispatch. In Firestore, tasks reside in subcollection `guilds/{guildId}/scheduledTasks` with transaction-protected status reconciliation. It runs only in the standalone bot process.
 14. **Production Database Adapter (`packages/database/src/firestore-adapter.ts`)** — Official Firebase Admin SDK adapter with guild-level isolation, subcollections, transactions, per-guild locks, exponential backoff retries, and strict non-fallback behavior.
 

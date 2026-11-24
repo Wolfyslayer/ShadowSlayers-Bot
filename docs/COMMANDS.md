@@ -1,4 +1,4 @@
-# Slash Command Reference – ShadowSlayers – Legends of Elements
+# Slash Command Reference – ShadowSlayers Bot
 
 All commands enforce RBAC permission validation, localized responses, structured error handling, and audit logging. No AI commands exist.
 

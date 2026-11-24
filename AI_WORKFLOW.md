@@ -1,6 +1,6 @@
 # AI_WORKFLOW.md – Development & Maintenance Rules
 
-> **Note**: This document governs how AI coding assistants and human engineers must work inside the **ShadowSlayers – Legends of Elements** repository. It does **NOT** describe any AI feature inside the Discord bot or dashboard (AI features are strictly prohibited in this codebase).
+> **Note**: This document governs how AI coding assistants and human engineers must work inside the **ShadowSlayers Bot** repository. It does **NOT** describe any AI feature inside the Discord bot or dashboard (AI features are strictly prohibited in this codebase).
 
 ## Mandatory Engineering Workflow
 
