@@ -1,4 +1,132 @@
-# ShadowSlayers Bot: Master Roadmap
+# ShadowSlayers Bot – Roadmap
+
+> **Product direction (2026-11):** ShadowSlayers is being evolved from a server-specific bot into a configurable, multi-guild Discord bot platform. A newly added guild must start with an empty workspace and real Discord state—not a copy of the original ShadowSlayers server. Each guild owns its modules, commands, roles, channels, templates, permissions and data. Existing legacy features may remain available as optional modules/templates, but must not be imposed on new guilds.
+>
+> **Hosting decision:** Keep the current persistent bot on Lunafy and the trusted API on Google Cloud Run. Keep the existing static dashboard hosting/domain unchanged. Build a portable, modular bot so a later move to Google Cloud does not require a rewrite. No hosting migration or paid capacity increase is part of the current roadmap.
+>
+> **AI boundary:** “AI workflow” refers only to the engineering workflow for coding assistants. No AI/LLM functionality is to be added to the bot or dashboard.
+
+## Current platform roadmap
+
+Status is based on repository inspection, not assumptions from UI labels. “Existing baseline” means code exists; it does not mean every function has been verified live on Discord.
+
+### Phase 0.5 – Production data cleanup and empty guild foundation
+- [ ] Replace production use of `createInitialGuildSeed()` with a minimal, schema-valid empty guild factory.
+- [ ] Remove all fabricated members, moderation cases, warnings, appeals, logs, tickets, onboarding records, polls, giveaways, events, XP and example language content from production initialization.
+- [ ] Remove the hardcoded `shadowslayers-primary` fallback from dashboard guild selection; require an authenticated, authorized guild.
+- [ ] Keep test fixtures isolated under tests and make production imports unable to seed fixture records.
+- [ ] Preserve schema defaults and safe empty arrays/configuration; do not confuse technical defaults with demo content.
+- [ ] Audit existing Firestore documents for seeded/demo data; produce a backup and a record-level cleanup plan before any deletion.
+- **Acceptance:** a newly installed guild has zero fabricated records and only real Discord information; existing production data is not deleted or rewritten.
+- **Tests:** empty-guild factory, no production seed imports, no default guild fallback, migration and Firestore regression tests.
+
+### Phase 0.6 – Real Discord guild/member synchronization
+- [ ] Enumerate and synchronize actual members on initial guild availability, with pagination and rate-limit handling.
+- [ ] Add a `GuildMemberAdd` path that creates or updates a real member record.
+- [ ] Keep `GuildMemberUpdate` role/verification synchronization, but do not silently skip members with no database record.
+- [ ] Preserve departed-member history while excluding departed members from active member lists and active counts.
+- [ ] Reconcile missing/changed members safely after reconnects and partial gateway outages.
+- [ ] Use stable Discord user IDs as identity; do not infer membership from demo profiles or role-name-only assumptions.
+- **Acceptance:** member counts and lists match Discord, including joins, role changes, departures and reconnect recovery.
+- **Tests:** join/update/leave/rejoin, missing-record recovery, pagination, idempotency, departed-member filtering.
+
+### Phase 0.7 – Dashboard/API functional audit and repair
+- [ ] Map every dashboard action to its API route, authorization capability, database mutation and bot-side effect.
+- [ ] Remove, disable or correctly implement controls that currently have no working operation.
+- [ ] Replace the manual scheduler API action (currently returns HTTP 503) with a bot-owned, authenticated queue action or remove the misleading control.
+- [ ] Apply module toggles consistently to navigation, routes, commands and bot event handlers—not just save the flags.
+- [ ] Add clear loading, success, failure and offline states; never show a successful UI state for an unverified Discord operation.
+- [ ] Reconcile documentation with actual route behavior.
+- **Acceptance:** every visible control has a verified end-to-end behavior or is explicitly marked unavailable.
+- **Tests:** component/API contract tests, capability tests, bot-offline tests, integration tests.
+
+### Phase 0.8 – Generic guild model and modular bot foundation
+- [ ] Separate generic guild settings from legacy clan-rank, language-role and ShadowSlayers-specific assumptions.
+- [ ] Replace fixed clan-rank authorization with per-guild roles/capabilities and Discord permission checks.
+- [ ] Define module manifests: dependencies, required permissions/intents, settings schema, commands, event handlers and migrations.
+- [ ] Make modules independently enabled/disabled per guild; disabled modules must not expose commands, navigation or event side effects.
+- [ ] Keep one shared Gateway bot process serving many guilds with strict guild-data isolation.
+- [ ] Keep the runtime container-ready and configuration-driven for a future Google Cloud migration; do not migrate hosting now.
+- **Acceptance:** a clean guild can enable selected modules without receiving legacy roles, channels or permissions.
+- **Tests:** cross-guild isolation, module enable/disable, permission boundaries, startup and container build.
+
+### Phase 0.9 – Secure install welcome and dashboard handoff
+- [ ] On bot installation, send one welcome/setup message in a safe system channel or an explicitly selected channel.
+- [ ] Welcome message explains how to start with `/setup`; avoid unsolicited channel creation.
+- [ ] Implement `/setup` as a private response with an “Open dashboard” action.
+- [ ] Authenticate the Discord user and verify guild-management permission on the API, not from URL parameters.
+- [ ] Use a short-lived, single-use handoff ticket exchanged server-side for a session; never put long-lived bearer secrets in the URL.
+- [ ] Open the dashboard with the initiating guild selected; still allow the user to switch only among authorized guilds.
+- **Acceptance:** the dashboard opens authenticated to the correct guild and cannot be used to access another guild by changing an ID.
+- **Tests:** ticket expiry/replay, wrong user, wrong guild, permission revocation, popup/deep-link behavior.
+
+### Phase 1.0 – Empty-first Server Template Maker
+- [ ] Create a visual server structure editor for categories, text channels, voice channels and descriptions.
+- [ ] Create/configure roles and permission overwrites with safe previews.
+- [ ] Allow channel selection for welcome, logs, moderation, tickets and other enabled modules.
+- [ ] Show a complete diff/preview before applying any Discord changes.
+- [ ] Apply changes idempotently and report partial failures with retry support.
+- [ ] Never delete, rename or overwrite existing Discord resources without a separate explicit confirmation.
+- **Acceptance:** users can design a server from an empty canvas and safely apply only the approved changes.
+
+### Phase 1.1 – Per-guild module and built-in command selection
+- [ ] Build a clear module catalogue with descriptions, dependencies and required Discord permissions.
+- [ ] Let each guild enable/disable built-in modules and commands independently.
+- [ ] Hide or disable module navigation and slash commands when the module is off.
+- [ ] Explain dependencies and prevent disabling a required dependency without confirmation.
+- **Acceptance:** each guild has an independent feature set and no legacy module is enabled by assumption.
+
+### Phase 1.2 – Custom Command Builder
+- [ ] Create custom slash commands without editing bot source code.
+- [ ] Support safe response types: text, embeds, variables, links and ephemeral/public replies.
+- [ ] Configure required permissions, allowed roles and channel restrictions.
+- [ ] Add allowlisted actions (send message, grant/revoke a configured role, etc.) with permission checks and audit logs.
+- [ ] Validate command names, payload size, mentions, URLs and action arguments.
+- [ ] Version commands and provide preview/test before publishing.
+- **Acceptance:** custom commands are guild-scoped, validated, auditable and cannot execute arbitrary code.
+
+### Phase 1.3 – Template library and reusable automation
+- [ ] Save, duplicate, import and export user-created templates.
+- [ ] Offer optional starter templates (Gaming, Community, Clan/Guild, Support); never auto-apply them.
+- [ ] Add safe automation builder for supported triggers/actions with execution history and loop protection.
+- [ ] Ensure templates contain configuration only, never another guild's live user data or secrets.
+- **Acceptance:** templates can be reused across guilds without cross-guild data leakage.
+
+### Phase 1.4 – Security, privacy, reliability and migration readiness
+- [ ] Complete cross-guild authorization and data-isolation review.
+- [ ] Add rate limits, audit trails, retention controls and safe backup/restore.
+- [ ] Verify scheduler recovery, queue retries, idempotency and bot restart behavior.
+- [ ] Add health/readiness diagnostics and structured operational logs.
+- [ ] Validate container portability without changing current hosting.
+- **Acceptance:** documented threat model, tested recovery and no known cross-guild access path.
+
+### Phase 1.5 – Final end-to-end QA and release
+- [ ] Test with at least two independent test guilds with different module selections.
+- [ ] Verify fresh install, setup handoff, template preview/apply, custom commands and member lifecycle.
+- [ ] Run all CI checks and live test checklist; distinguish simulated tests from real Discord/Firestore tests.
+- [ ] Update deployment and administrator documentation.
+- [ ] Obtain explicit user approval before merging/releasing each phase.
+- **Acceptance:** a new guild can independently build and operate its own server experience.
+
+## Current audit snapshot
+
+- [x] Repository architecture and current deployment split reviewed.
+- [x] Production seed path identified.
+- [x] Main dashboard views and visible action handlers inventoried.
+- [x] API route inventory and authorization middleware reviewed.
+- [x] Module flags and current clan-specific permission model reviewed.
+- [x] Bot member lifecycle handlers reviewed.
+- [x] CI and existing test coverage reviewed.
+- [ ] Every API operation traced through queue consumer to Discord side effect.
+- [ ] Firestore production data inventory and safe backup plan completed (read-only until approval).
+- [ ] Full multi-guild isolation and module dependency review completed.
+- [ ] Docs-only roadmap/audit PR reviewed and approved.
+
+## Legacy implementation history
+
+The original phases below document the ShadowSlayers-specific baseline and should be treated as historical implementation records, not as proof that the platform roadmap above is complete. Existing capabilities may be retained as optional modules or starter templates after decoupling.
+
+---
 
 > **Scope Policy**: This platform contains **zero AI functionality**. All moderation, AutoMod, localization, onboarding, and administration features operate deterministically via rule engines, explicit templates, and manual administrator review.
 
