@@ -36,7 +36,7 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 - **Tests:** empty-guild factory, no production seed imports, no default guild fallback, migration and Firestore regression tests.
 
 ### Phase 0.6 – Real Discord guild/member synchronization
-- **Status:** join and update events now create missing profiles. Initial enumeration, reconciliation, active-list filtering and live verification remain pending.
+- **Status:** join and update events now create missing profiles. The dashboard member list excludes departed profiles. Initial enumeration, reconciliation and live verification remain pending.
 - [ ] Enumerate and synchronize actual members on initial guild availability, with pagination and rate-limit handling.
 - [ ] Add a `GuildMemberAdd` path that creates or updates a real member record.
 - [ ] Keep `GuildMemberUpdate` role/verification synchronization, but do not silently skip members with no database record.
