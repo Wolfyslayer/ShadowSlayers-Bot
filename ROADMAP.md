@@ -10,6 +10,18 @@
 
 Status is based on repository inspection, not assumptions from UI labels. “Existing baseline” means code exists; it does not mean every function has been verified live on Discord.
 
+### Phase 0.4.1 – Build & Deployment Automation
+- [ ] Audit existing CI, API deployment configuration and Lunafy runtime requirements.
+- [ ] Add manual workflow_dispatch bot build with lint, tests, build and startup verification.
+- [ ] Upload a downloadable Lunafy artifact containing dist-bot, package.json, package-lock.json and verified required runtime files; exclude secrets and development files.
+- [ ] Verify artifact structure and document mobile download, upload, restart and rollback.
+- [ ] Add manual Cloud Run API deployment workflow restricted to main and explicit production approval; preserve existing service configuration, secrets, URL and runtime identity.
+- [ ] Configure keyless GitHub OIDC / Workload Identity Federation with least privilege and repository/branch restrictions; document required owner setup without exposing credentials.
+- [ ] Verify CI and artifact build; separately verify approved live deployment and health checks, with rollback instructions.
+- [ ] Update AI_WORKFLOW.md and deployment documentation with per-phase deployment requirements.
+- **Acceptance:** mobile-only build/download/upload to Lunafy and manual API deployment to the existing shadowslayers-api service in europe-west4, project shadowslayers-7f48f. No automatic production deploy, direct Codex cloud credentials, hosting migration or unapproved cost increase.
+- **Status:** planned, 0/8 implementation tasks complete. Cloud IAM setup and live verification require owner participation.
+
 ### Phase 0.5 – Production data cleanup and empty guild foundation
 - [ ] Replace production use of `createInitialGuildSeed()` with a minimal, schema-valid empty guild factory.
 - [ ] Remove all fabricated members, moderation cases, warnings, appeals, logs, tickets, onboarding records, polls, giveaways, events, XP and example language content from production initialization.
