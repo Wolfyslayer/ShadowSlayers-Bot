@@ -24,10 +24,10 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 - **Status:** complete, 8/8 tasks. Merged through PR #5.
 
 ### Phase 0.5 – Production data cleanup and empty guild foundation
-- **Status:** in progress. The empty guild factory and regression test are added. Wiring production initialization and removing the dashboard fallback remain pending. Firestore inventory and cleanup require a read-only review and a backup before any owner-approved deletion.
+- **Status:** in progress. The empty guild factory and regression test are added. The dashboard requires an explicit session guild. Wiring production initialization remains pending. Firestore inventory and cleanup require a read-only review and a backup before any owner-approved deletion.
 - [ ] Replace production use of `createInitialGuildSeed()` with a minimal, schema-valid empty guild factory.
 - [ ] Remove all fabricated members, moderation cases, warnings, appeals, logs, tickets, onboarding records, polls, giveaways, events, XP and example language content from production initialization.
-- [ ] Remove the hardcoded `shadowslayers-primary` fallback from dashboard guild selection; require an authenticated, authorized guild.
+- [x] Remove the hardcoded `shadowslayers-primary` fallback from dashboard guild selection; require an authenticated, authorized guild.
 - [ ] Keep test fixtures isolated under tests and make production imports unable to seed fixture records.
 - [ ] Preserve schema defaults and safe empty arrays/configuration; do not confuse technical defaults with demo content.
 - [ ] Audit existing Firestore documents for seeded/demo data; produce a backup and a record-level cleanup plan before any deletion.
