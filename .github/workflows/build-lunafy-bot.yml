@@ -61,7 +61,8 @@ jobs:
         id: artifact
         shell: bash
         run: |
-          echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+          version="$(node -p 'require("./package.json").version')"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           echo "commit=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
 
       - name: Upload mobile-downloadable Lunafy package
