@@ -18,7 +18,7 @@ import {
   type GuildMember,
 } from 'discord.js';
 import type { DiscordCommandScope } from '../../../packages/config/src/env.ts';
-import type { DatabaseAdapter } from '../../../packages/database/src/adapter.ts';
+import { GuildWriteConflict, type DatabaseAdapter } from '../../../packages/database/src/adapter.ts';
 import { createEmptyGuild } from '../../../packages/database/src/empty-guild.ts';
 import { enumerateGuildMembers, GuildMemberSyncQueue, markMemberDeparted, synchronizeMemberProfile } from './services/member-sync.ts';
 import type { BotControlCommand, BotRuntimeSnapshot } from '../../../packages/shared/src/bot-control.ts';
@@ -321,7 +321,18 @@ export class ShadowSlayersBotClient {
   }
 
   private async synchronizeGuildState(discordGuild: Guild): Promise<void> {
-    await this.memberSyncQueue.run(discordGuild.id, () => this.refreshGuildMemberSnapshot(discordGuild));
+    await this.memberSyncQueue.run(discordGuild.id, () =>
+      this.retryGuildWrite(() => this.refreshGuildMemberSnapshot(discordGuild)));
+  }
+
+  private async retryGuildWrite(operation: () => Promise<void>): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        if (!(error instanceof GuildWriteConflict) || attempt >= 2) throw error;
+      }
+    }
   }
 
   private async refreshGuildMemberSnapshot(discordGuild: Guild): Promise<void> {
@@ -1105,7 +1116,7 @@ export class ShadowSlayersBotClient {
 
     const refreshMember = (member: GuildMember, departed = false) => {
       void this.memberSyncQueue.run(member.guild.id, () =>
-        this.syncLiveMemberRolesToDb(member, departed)).catch((err) => {
+        this.retryGuildWrite(() => this.syncLiveMemberRolesToDb(member, departed))).catch((err) => {
         console.error(`[ShadowSlayers] Member synchronization failed for guild ${member.guild.id}:`, err);
       });
     };

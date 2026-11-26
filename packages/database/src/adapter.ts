@@ -14,6 +14,13 @@ import { migrateDatabaseRoot } from '../../../database/schema-migrations.ts';
 import { anonymizeGuildUserData } from '../../shared/src/guild-privacy.ts';
 import { FirestoreDatabaseAdapter } from './firestore-adapter.ts';
 
+export class GuildWriteConflict extends Error {
+  constructor(guildId: string) {
+    super(`Guild "${guildId}" changed while saving; reload it before retrying.`);
+    this.name = 'GuildWriteConflict';
+  }
+}
+
 export interface DatabaseAdapter {
   readonly driverName: 'local' | 'firestore' | 'supabase';
   init(): Promise<void>;

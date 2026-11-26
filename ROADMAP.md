@@ -36,7 +36,7 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 - **Tests:** empty-guild factory, no production seed imports, no default guild fallback, migration and Firestore regression tests.
 
 ### Phase 0.6 – Real Discord guild/member synchronization
-- **Status:** startup, guild availability and session resume use paginated member enumeration. Gateway snapshots and member events are serialized per guild. The dashboard excludes departed profiles. Cross-process concurrency review and live verification remain pending.
+- **Status:** startup, guild availability and session resume use paginated member enumeration. Gateway snapshots and member events are serialized per guild. Firestore rejects stale guild snapshots and the bot retries synchronization from fresh data. The dashboard excludes departed profiles. Live verification remains pending.
 - [ ] Enumerate and synchronize actual members on initial guild availability, with pagination and rate-limit handling.
 - [ ] Add a `GuildMemberAdd` path that creates or updates a real member record.
 - [ ] Keep `GuildMemberUpdate` role/verification synchronization, but do not silently skip members with no database record.
