@@ -1,6 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { synchronizeMemberProfile } from '../apps/bot/src/services/member-sync.ts';
+import { enumerateGuildMembers, synchronizeMemberProfile } from '../apps/bot/src/services/member-sync.ts';
+
+test('member enumeration advances by numeric Discord ID and propagates failures', async () => {
+  const result = await enumerateGuildMembers(async ({ after }) => {
+    if (!after) return new Map([['10', { id: '10' }], ['9', { id: '9' }]]);
+    assert.equal(after, '10');
+    return new Map([['11', { id: '11' }]]);
+  }, 2);
+  assert.deepEqual([...result.keys()].sort(), ['10', '11', '9']);
+  await assert.rejects(() => enumerateGuildMembers(async () => { throw new Error('offline'); }), /offline/);
+  await assert.rejects(() =>
+    enumerateGuildMembers(async () => new Map([['9', { id: '9' }]]), 1), /did not advance/);
+});
 
 test('member profile uses the Discord ID and preserves progress on rejoin', () => {
   const profile = {
