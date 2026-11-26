@@ -11,7 +11,8 @@ import {
   RUSSIAN_TRANSLATIONS,
 } from '../../localization/src/engine.ts';
 
-export const CURRENT_SCHEMA_VERSION = 3;
+import { CURRENT_SCHEMA_VERSION } from './empty-guild.ts';
+export { CURRENT_SCHEMA_VERSION } from './empty-guild.ts';
 
 export function createInitialGuildSeed(
   guildId = 'shadowslayers-primary',
