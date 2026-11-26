@@ -14,13 +14,13 @@
 3. Keep commits meaningful and scoped to the phase. Do not bundle unrelated cleanup or future-phase work.
 4. After each commit, report the phase checklist with checked/unchecked tasks, completed count, total count and percentage.
 5. Run the relevant checks after each meaningful commit. Wait for normal GitHub Actions CI to pass before making the next commit.
-6. Do not merge a pull request, deploy, publish slash-command changes or perform live service changes without explicit user approval.
+6. The owner has granted standing approval to merge completed phases that meet every roadmap acceptance criterion and have green CI. Production deployment, slash-command publication, live service changes and production-data changes still require separate explicit owner approval.
 7. After an approved merge, tell the user whether they need to run `git pull origin main` and whether a bot rebuild/re-upload or dashboard/API deployment is required.
 8. Break every phase into explicit main tasks and subtasks, and keep a complete phase checklist in progress reports.
 9. Update `ROADMAP.md` in every commit so repository status and the commit's actual verification state stay synchronized.
 10. After pushing each commit, verify GitHub Actions for that exact commit. Continue automatically within the active phase only after CI is green; investigate and fix failures before proceeding.
 11. Never weaken, skip, or delete tests or security checks merely to make CI pass. Add regression coverage for every defect discovered.
-12. When a phase is complete, stop for explicit owner approval before merge. Continue with the next phase only after the approved merge is present on `main`.
+12. Report every commit before continuing. Merge a completed phase under the standing approval and start the next phase once the merge is on `main`.
 
 ## 3. Data and multi-guild safety
 1. Treat every guild as an isolated tenant. Every database query, queue item, cache key, scheduled task, log and command must be scoped to a verified `guildId`.
