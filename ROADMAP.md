@@ -12,15 +12,15 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 
 ### Phase 0.4.1 – Build & Deployment Automation
 - [x] Audit existing CI, API deployment configuration and Lunafy runtime requirements; enable CI validation on pull requests.
-- [ ] Add manual workflow_dispatch bot build with lint, tests, build and startup verification.
-- [ ] Upload a downloadable Lunafy artifact containing dist-bot, package.json, package-lock.json and verified required runtime files; exclude secrets and development files.
+- [x] Add manual workflow_dispatch bot build with security audit, lint/typecheck, tests, build and startup verification.
+- [x] Upload a downloadable, version-and-commit-labelled Lunafy artifact containing dist-bot, package.json and package-lock.json; validate a production install and exclude dependencies, secrets and development files.
 - [ ] Verify artifact structure and document mobile download, upload, restart and rollback.
 - [ ] Add manual Cloud Run API deployment workflow restricted to main and explicit production approval; preserve existing service configuration, secrets, URL and runtime identity.
 - [ ] Configure keyless GitHub OIDC / Workload Identity Federation with least privilege and repository/branch restrictions; document required owner setup without exposing credentials.
 - [ ] Verify CI and artifact build; separately verify approved live deployment and health checks, with rollback instructions.
 - [ ] Update AI_WORKFLOW.md and deployment documentation with per-phase deployment requirements.
 - **Acceptance:** mobile-only build/download/upload to Lunafy and manual API deployment to the existing shadowslayers-api service in europe-west4, project shadowslayers-7f48f. No automatic production deploy, direct Codex cloud credentials, hosting migration or unapproved cost increase.
-- **Status:** in progress, 1/8 implementation tasks complete (12.5%). PR #2 documentation is merged on `main`; its GitGuardian check passed. Existing build/runtime/deployment configuration has been audited. Cloud IAM setup and live verification require owner participation.
+- **Status:** in progress, 3/8 implementation tasks complete (37.5%). PR #2 documentation is merged on `main`; its GitGuardian check passed. Existing build/runtime/deployment configuration has been audited. The manual Lunafy workflow and minimal artifact contract are implemented; GitHub workflow execution and Lunafy upload remain separate verification gates. Cloud IAM setup and live verification require owner participation.
 
 ### Phase 0.5 – Production data cleanup and empty guild foundation
 - [ ] Replace production use of `createInitialGuildSeed()` with a minimal, schema-valid empty guild factory.
