@@ -24,14 +24,14 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 - **Status:** complete, 8/8 tasks. Merged through PR #5.
 
 ### Phase 0.5 – Production data cleanup and empty guild foundation
-- The CLI preview found 17 and 8 matching entries in the two approved test guilds. The owner accepted the untested export for this one cleanup. The guarded apply step remains pending.
-- **Status:** implementation and automated regression checks passed. Production initialization uses the empty factory and legacy fixtures are test-only. See [Firestore inventory and cleanup](docs/FIRESTORE_CLEANUP.md). A live inventory, verified backup and live fresh-guild verification remain outstanding.
+- The CLI preview found 17 and 8 matching entries in the two approved test guilds. The owner completed the export, waived the restore test for this cleanup only, and reported zero matching entries in the post-cleanup preview.
+- **Status:** implementation and automated regression checks passed. Cleanup was confirmed by the owner for both scoped test guilds. Live fresh-guild verification remains outstanding. See [Firestore inventory and cleanup](docs/FIRESTORE_CLEANUP.md).
 - [x] Replace production use of `createInitialGuildSeed()` with a minimal, schema-valid empty guild factory.
 - [x] Remove all fabricated members, moderation cases, warnings, appeals, logs, tickets, onboarding records, polls, giveaways, events, XP and example language content from production initialization.
 - [x] Remove the hardcoded `shadowslayers-primary` fallback from dashboard guild selection; require an authenticated, authorized guild.
 - [x] Keep test fixtures isolated under tests and make production imports unable to seed fixture records.
 - [x] Preserve schema defaults and safe empty arrays/configuration; do not confuse technical defaults with demo content.
-- [ ] Audit existing Firestore documents for seeded/demo data; produce a backup and a record-level cleanup plan before any deletion.
+- [x] Audit Firestore records in the two approved test guilds, export a backup and prepare a record-level cleanup plan before deletion.
 - **Acceptance:** a newly installed guild has zero fabricated records and only real Discord information; existing production data is not deleted or rewritten.
 - **Tests:** empty-guild factory, no production seed imports, no default guild fallback, migration and Firestore regression tests.
 
