@@ -1,6 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { enumerateGuildMembers, synchronizeMemberProfile } from '../apps/bot/src/services/member-sync.ts';
+import { enumerateGuildMembers, GuildMemberSyncQueue, markMemberDeparted, synchronizeMemberProfile } from '../apps/bot/src/services/member-sync.ts';
+
+test('member writes for one guild wait for an in-flight snapshot and recover after failure', async () => {
+  const queue = new GuildMemberSyncQueue();
+  const order: string[] = [];
+  const snapshot = queue.run('guild', async () => {
+    order.push('snapshot');
+    await Promise.resolve();
+    order.push('snapshot done');
+    throw new Error('failed snapshot');
+  });
+  const event = queue.run('guild', async () => { order.push('event'); });
+  await assert.rejects(snapshot, /failed snapshot/);
+  await event;
+  assert.deepEqual(order, ['snapshot', 'snapshot done', 'event']);
+});
 
 test('member enumeration advances by numeric Discord ID and propagates failures', async () => {
   const result = await enumerateGuildMembers(async ({ after }) => {
@@ -22,7 +37,10 @@ test('member profile uses the Discord ID and preserves progress on rejoin', () =
   const initial = synchronizeMemberProfile(undefined, profile);
   assert.equal(initial.userId, '123');
   assert.equal(initial.xp, 0);
-  const updated = synchronizeMemberProfile({ ...initial, xp: 40, isDeparted: true }, {
+  const departed = markMemberDeparted({ ...initial, xp: 40, verified: true });
+  assert.equal(departed.verified, false);
+  assert.equal(departed.isDeparted, true);
+  const updated = synchronizeMemberProfile(departed, {
     ...profile, displayName: 'New name',
   });
   assert.equal(updated.displayName, 'New name');

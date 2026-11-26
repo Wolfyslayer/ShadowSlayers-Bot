@@ -20,7 +20,7 @@ import {
 import type { DiscordCommandScope } from '../../../packages/config/src/env.ts';
 import type { DatabaseAdapter } from '../../../packages/database/src/adapter.ts';
 import { createEmptyGuild } from '../../../packages/database/src/empty-guild.ts';
-import { enumerateGuildMembers, synchronizeMemberProfile } from './services/member-sync.ts';
+import { enumerateGuildMembers, GuildMemberSyncQueue, markMemberDeparted, synchronizeMemberProfile } from './services/member-sync.ts';
 import type { BotControlCommand, BotRuntimeSnapshot } from '../../../packages/shared/src/bot-control.ts';
 import {
   signBotControlResult,
@@ -111,6 +111,7 @@ export class ShadowSlayersBotClient {
   private readonly db: DatabaseAdapter;
   private lastRegisteredCommandHash: string | null = null;
   private readonly guildCommandRegistrationInFlight = new Map<string, Promise<void>>();
+  private readonly memberSyncQueue = new GuildMemberSyncQueue();
   private controlPollTimer: NodeJS.Timeout | null = null;
   private statusTimer: NodeJS.Timeout | null = null;
   private controlPoll: Promise<void> | null = null;
@@ -320,12 +321,20 @@ export class ShadowSlayersBotClient {
   }
 
   private async synchronizeGuildState(discordGuild: Guild): Promise<void> {
+    await this.memberSyncQueue.run(discordGuild.id, () => this.refreshGuildMemberSnapshot(discordGuild));
+  }
+
+  private async refreshGuildMemberSnapshot(discordGuild: Guild): Promise<void> {
     const liveMembers = await enumerateGuildMembers((options) => discordGuild.members.list(options));
     const guild = (await this.db.getGuild(discordGuild.id)) ??
       createEmptyGuild(discordGuild.id, discordGuild.name);
     guild.guildName = discordGuild.name;
     guild.discovery = discoverLiveDiscordGuild(discordGuild as unknown as GuildLike, guild.discovery, guild.modules.discovery);
-    const records = new Map(guild.members.map((member) => [member.userId, member]));
+    const complete = discordGuild.available && liveMembers.size === discordGuild.memberCount;
+    const records = new Map(guild.members.map((member) => [
+      member.userId,
+      complete && !liveMembers.has(member.userId) ? markMemberDeparted(member) : member,
+    ]));
     for (const member of liveMembers.values()) {
       records.set(member.id, this.createLiveMemberRecord(member, records.get(member.id)));
     }
@@ -952,11 +961,7 @@ export class ShadowSlayersBotClient {
 
     if (departed) {
       if (!previous) return;
-      const rec = previous;
-      rec.isDeparted = true;
-      rec.clanRank = null;
-      rec.hasClanRank = false;
-      rec.verified = false;
+      guildState.members[index] = markMemberDeparted(previous);
     } else {
       const rec = this.createLiveMemberRecord(member, previous);
       if (index < 0) guildState.members.push(rec);
@@ -1098,12 +1103,13 @@ export class ShadowSlayersBotClient {
       });
     });
 
-    const refreshMember = (member: GuildMember) => {
-      void this.syncLiveMemberRolesToDb(member).catch((err) => {
+    const refreshMember = (member: GuildMember, departed = false) => {
+      void this.memberSyncQueue.run(member.guild.id, () =>
+        this.syncLiveMemberRolesToDb(member, departed)).catch((err) => {
         console.error(`[ShadowSlayers] Member synchronization failed for guild ${member.guild.id}:`, err);
       });
     };
-    this.client.on(Events.GuildMemberAdd, refreshMember);
+    this.client.on(Events.GuildMemberAdd, (member) => refreshMember(member));
     this.client.on(Events.GuildMemberUpdate, (_oldMember, newMember) => {
       refreshMember(newMember);
     });
@@ -1140,8 +1146,15 @@ export class ShadowSlayersBotClient {
     });
 
     this.client.on(Events.GuildMemberRemove, (member) => {
-      if ('roles' in member) {
-        void this.syncLiveMemberRolesToDb(member as GuildMember, true);
+      refreshMember(member as GuildMember, true);
+    });
+
+    this.client.on(Events.ShardResume, (shardId) => {
+      for (const guild of this.client?.guilds.cache.values() ?? []) {
+        if (guild.shardId !== shardId || !guild.available) continue;
+        void this.synchronizeGuildState(guild).catch((err) => {
+          console.error(`[ShadowSlayers] Could not reconcile guild ${guild.id} after reconnect:`, err);
+        });
       }
     });
 

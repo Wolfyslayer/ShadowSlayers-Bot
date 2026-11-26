@@ -2,6 +2,25 @@ import type { GuildMemberRecord } from '../../../../packages/shared/src/types.ts
 
 type LiveProfile = Pick<GuildMemberRecord, 'userId' | 'username' | 'displayName' | 'avatarUrl' | 'joinedAt'>;
 
+export function markMemberDeparted(member: GuildMemberRecord): GuildMemberRecord {
+  return { ...member, isDeparted: true, clanRank: null, hasClanRank: false, verified: false };
+}
+
+export class GuildMemberSyncQueue {
+  private readonly pending = new Map<string, Promise<void>>();
+
+  async run(guildId: string, operation: () => Promise<void>): Promise<void> {
+    const previous = this.pending.get(guildId);
+    const next = (previous?.catch(() => undefined) ?? Promise.resolve()).then(operation);
+    this.pending.set(guildId, next);
+    try {
+      await next;
+    } finally {
+      if (this.pending.get(guildId) === next) this.pending.delete(guildId);
+    }
+  }
+}
+
 export async function enumerateGuildMembers<T extends { id: string }>(
   listPage: (options: { limit: number; after?: string }) => Promise<ReadonlyMap<string, T>>,
   limit = 1000,
