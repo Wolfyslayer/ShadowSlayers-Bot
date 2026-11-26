@@ -1,0 +1,75 @@
+name: Build Lunafy Bot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Verify and package bot
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out requested commit
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run repository security checks
+        run: npm run security:check
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Typecheck and lint
+        run: npm run lint
+
+      - name: Run automated tests
+        run: npm test
+
+      - name: Build standalone bot
+        run: npm run build:bot
+
+      - name: Verify standalone startup behavior
+        run: npm run check:bot-startup
+
+      - name: Stage minimal Lunafy package
+        run: |
+          mkdir -p lunafy-package/dist-bot
+          cp dist-bot/index.js lunafy-package/dist-bot/index.js
+          cp package.json package-lock.json lunafy-package/
+
+      - name: Verify production dependency installation
+        run: npm ci --omit=dev --ignore-scripts --prefix lunafy-package
+
+      - name: Remove installed dependencies from artifact
+        run: rm -rf lunafy-package/node_modules
+
+      - name: Verify artifact contents and runtime contract
+        run: node scripts/verify-lunafy-package.cjs lunafy-package
+
+      - name: Resolve artifact identity
+        id: artifact
+        shell: bash
+        run: |
+          echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+          echo "commit=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload mobile-downloadable Lunafy package
+        uses: actions/upload-artifact@v4
+        with:
+          name: lunafy-bot-v${{ steps.artifact.outputs.version }}-${{ steps.artifact.outputs.commit }}
+          path: lunafy-package/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 9
+

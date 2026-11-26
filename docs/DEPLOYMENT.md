@@ -98,6 +98,26 @@ npm run lint
 
 ## Lunafy: bot-only deployment
 
+### Manual GitHub build and Android download
+
+The `Build Lunafy Bot` GitHub Action is build-only and never deploys or restarts the bot. It runs the locked install, repository security check, production dependency audit, TypeScript check, all automated tests, bot build, and startup validation. It then verifies a production-only dependency installation and uploads a ZIP artifact named `lunafy-bot-v<version>-<commit>` containing only:
+
+- `dist-bot/index.js`
+- `package.json`
+- `package-lock.json`
+
+From an Android phone:
+
+1. Open the repository on github.com and select **Actions**.
+2. Select **Build Lunafy Bot**, tap **Run workflow**, choose the intended branch, and tap the green **Run workflow** button.
+3. Open the completed run and confirm every step is green.
+4. Scroll to **Artifacts** and tap `lunafy-bot-v…-<commit>`. Android downloads a ZIP file directly.
+5. In Lunafy, stop the bot, keep/export the currently working package as the rollback copy, upload and extract the new ZIP so `dist-bot/index.js` and both package files are at the application root.
+6. Keep `MAIN_FILE=dist-bot/index.js`. Use `npm ci --omit=dev` as installation and `npm run start:bot` as the persistent start command.
+7. Start the bot and verify its connected state, one existing read-only command, and the bot runtime/health indication in the dashboard. If it fails, stop it, restore the saved previous package, run `npm ci --omit=dev`, and restart.
+
+The artifact never contains `node_modules`, `.env` files, credentials, private keys, tests, source files, dashboard/API builds, or local data. Lunafy's existing environment variables remain on Lunafy and must not be copied into the ZIP.
+
 Build the bot on a CI/build machine using Node.js 22:
 
 ```sh
@@ -135,6 +155,82 @@ Do not host the API on Lunafy. Cloud Run supplies `PORT`; configure the deployed
 `NODE_ENV=production`, `APP_URL` (the HTTPS API origin only), `ALLOWED_ORIGINS` (the exact dashboard origin), `DATABASE_ADAPTER=firestore`, and `FIREBASE_PROJECT_ID`. `DISCORD_CLIENT_ID` is a non-secret setting. `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_SECRET`, `BOT_CONTROL_SECRET`, and `SESSION_SECRET` are mounted from Secret Manager. The API's session and bot-control secrets were generated for this deployment; configure the same `BOT_CONTROL_SECRET` on Lunafy before bot-control operations are expected to work. Do not copy secret values into the dashboard or source repository.
 
 The Cloud Run runtime identity uses platform Application Default Credentials for Firestore. Other hosts may continue using the existing server-side service-account credential fields. The API never starts a Gateway; live operations are sent to the bot through the shared Firestore queue.
+
+### Manual Cloud Run deployment from GitHub
+
+The `Deploy Cloud Run API` Action can run only when selected from `main`, requires the operator to type `shadowslayers-api`, uses the protected `production` GitHub environment, and serializes deployments so two production updates cannot overlap. It builds and tests before authenticating. Authentication is keyless GitHub OIDC through Workload Identity Federation; no Google credential is stored in GitHub.
+
+`gcloud run deploy --source .` updates the image/revision while omitted flags preserve the service's existing environment variables, Secret Manager references, public URL, runtime service account, scaling, ingress, and other service settings. The workflow records the currently serving revision, verifies `/api/health`, and automatically sends 100% traffic back to that revision if health verification fails.
+
+Repository owners must configure these GitHub **Actions variables** (not secrets):
+
+| Variable | Value |
+| --- | --- |
+| `GCP_WIF_PROVIDER` | Full provider resource name, for example `projects/123456789/locations/global/workloadIdentityPools/github/providers/shadowslayers` |
+| `GCP_DEPLOY_SERVICE_ACCOUNT` | Dedicated deployer email, for example `github-shadowslayers-deployer@shadowslayers-7f48f.iam.gserviceaccount.com` |
+
+Also create a GitHub environment named `production`, add the repository owner as a required reviewer, prevent administrator bypass if available, and restrict deployment branches to `main`.
+
+#### One-time Google Cloud setup from Android
+
+These steps use Google Cloud Console in Chrome with **Desktop site** enabled and its browser-based Cloud Shell. They do not require a local computer. Replace `PROJECT_NUMBER` after the first command prints it; keep the repository spelling exact.
+
+```sh
+gcloud config set project shadowslayers-7f48f
+gcloud services enable iamcredentials.googleapis.com sts.googleapis.com run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
+gcloud projects describe shadowslayers-7f48f --format='value(projectNumber)'
+
+gcloud iam service-accounts create github-shadowslayers-deployer \
+  --display-name='GitHub ShadowSlayers Cloud Run deployer'
+
+gcloud iam workload-identity-pools create github \
+  --location=global \
+  --display-name='GitHub Actions'
+
+gcloud iam workload-identity-pools providers create-oidc shadowslayers \
+  --location=global \
+  --workload-identity-pool=github \
+  --display-name='ShadowSlayers main deployments' \
+  --issuer-uri='https://token.actions.githubusercontent.com' \
+  --attribute-mapping='google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref' \
+  --attribute-condition="assertion.repository=='Wolfyslayer/ShadowSlayers-Bot' && assertion.ref=='refs/heads/main'"
+
+gcloud iam service-accounts add-iam-policy-binding \
+  github-shadowslayers-deployer@shadowslayers-7f48f.iam.gserviceaccount.com \
+  --role='roles/iam.workloadIdentityUser' \
+  --member='principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/attribute.repository/Wolfyslayer/ShadowSlayers-Bot'
+
+gcloud projects add-iam-policy-binding shadowslayers-7f48f \
+  --member='serviceAccount:github-shadowslayers-deployer@shadowslayers-7f48f.iam.gserviceaccount.com' \
+  --role='roles/run.sourceDeveloper'
+
+gcloud iam service-accounts add-iam-policy-binding \
+  shadowslayers-api@shadowslayers-7f48f.iam.gserviceaccount.com \
+  --member='serviceAccount:github-shadowslayers-deployer@shadowslayers-7f48f.iam.gserviceaccount.com' \
+  --role='roles/iam.serviceAccountUser'
+
+gcloud iam workload-identity-pools providers describe shadowslayers \
+  --location=global \
+  --workload-identity-pool=github \
+  --format='value(name)'
+```
+
+Grant no Secret Manager accessor or Firestore role to the deployer: it deploys the source and may impersonate only the existing API runtime identity; the runtime identity keeps its existing data/secret access. If Cloud Run source deployment reports that the deployer cannot use the project, add `roles/serviceusage.serviceUsageConsumer` to only this deployer. If it reports that the Cloud Build service agent cannot read/write the existing source-deploy Artifact Registry repository, correct that agent/repository binding rather than granting the GitHub deployer secret or database access.
+
+On GitHub mobile: open **Settings → Environments → New environment**, create `production`, configure required reviewer and `main`; then open **Settings → Secrets and variables → Actions → Variables** and add the two values above. Do not add a JSON key.
+
+To deploy: open **Actions → Deploy Cloud Run API → Run workflow**, select `main`, enter `shadowslayers-api`, run it, approve the `production` environment request, and confirm the health step and deployment summary are green.
+
+#### Manual revision rollback from Android
+
+The failed-health path rolls back automatically. For a later functional regression:
+
+1. Open Google Cloud Console → **Cloud Run** → `shadowslayers-api` → **Revisions**.
+2. Identify the last known-good revision from the successful workflow summary or revision list.
+3. Select **Manage traffic**, set that revision to `100%`, set all others to `0%`, and save.
+4. Open `https://shadowslayers-api-vloo4dmzfa-ez.a.run.app/api/health` and confirm `ok` is `true`; then verify dashboard sign-in and one read-only API function.
+
+Rollback changes traffic only. It does not delete revisions, change secrets, modify Firestore, or rebuild the bot.
 
 ## GitHub Pages
 

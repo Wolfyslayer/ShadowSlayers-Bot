@@ -14,6 +14,7 @@
     "build:api": "esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-api/index.js",
     "start:api": "node dist-api/index.js",
     "check:bot-startup": "node scripts/check-bot-startup.cjs",
+    "check:lunafy-package": "node scripts/verify-lunafy-package.cjs lunafy-package",
     "test": "tsx --test tests/*.test.ts",
     "clean": "node scripts/clean.cjs",
     "lint": "tsc --noEmit",
