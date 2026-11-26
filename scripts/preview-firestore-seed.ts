@@ -1,6 +1,5 @@
-import { execFileSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
-import { initializeApp, deleteApp } from 'firebase-admin/app';
+import { applicationDefault, initializeApp, deleteApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { createInitialGuildSeed } from '../tests/guild-seed-fixture.ts';
 
@@ -40,14 +39,7 @@ function identity(record: unknown): string | null {
 
 const app = initializeApp({
   projectId,
-  credential: {
-    async getAccessToken() {
-      const token = execFileSync('gcloud', ['auth', 'print-access-token', '--quiet'], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
-      }).trim();
-      return { access_token: token, expires_in: 300 };
-    },
-  },
+  credential: applicationDefault(),
 });
 
 try {
