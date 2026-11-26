@@ -25,7 +25,7 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 
 ### Phase 0.5 – Production data cleanup and empty guild foundation
 - The CLI preview found 17 and 8 matching entries in the two approved test guilds. The owner completed the export, waived the restore test for this cleanup only, and reported zero matching entries in the post-cleanup preview.
-- **Status:** implementation and automated regression checks passed. Cleanup was confirmed by the owner for both scoped test guilds. Live fresh-guild verification remains outstanding. See [Firestore inventory and cleanup](docs/FIRESTORE_CLEANUP.md).
+- **Status:** implementation, automated regression checks and the fresh-guild live acceptance check passed. The owner confirmed cleanup for both scoped test guilds. The Lunafy PR build (`c12b0d6`) initialized a new Discord test guild. The read-only Firestore check reported zero failures for guild identity, empty activity lists, empty template proposals, Discord ID format and absence of scheduled tasks. See [Firestore inventory and cleanup](docs/FIRESTORE_CLEANUP.md).
 - [x] Replace production use of `createInitialGuildSeed()` with a minimal, schema-valid empty guild factory.
 - [x] Remove all fabricated members, moderation cases, warnings, appeals, logs, tickets, onboarding records, polls, giveaways, events, XP and example language content from production initialization.
 - [x] Remove the hardcoded `shadowslayers-primary` fallback from dashboard guild selection; require an authenticated, authorized guild.
