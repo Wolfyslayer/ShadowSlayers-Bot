@@ -20,7 +20,7 @@ import {
 import type { DiscordCommandScope } from '../../../packages/config/src/env.ts';
 import type { DatabaseAdapter } from '../../../packages/database/src/adapter.ts';
 import { createEmptyGuild } from '../../../packages/database/src/empty-guild.ts';
-import { synchronizeMemberProfile } from './services/member-sync.ts';
+import { enumerateGuildMembers, synchronizeMemberProfile } from './services/member-sync.ts';
 import type { BotControlCommand, BotRuntimeSnapshot } from '../../../packages/shared/src/bot-control.ts';
 import {
   signBotControlResult,
@@ -320,11 +320,32 @@ export class ShadowSlayersBotClient {
   }
 
   private async synchronizeGuildState(discordGuild: Guild): Promise<void> {
+    const liveMembers = await enumerateGuildMembers((options) => discordGuild.members.list(options));
     const guild = (await this.db.getGuild(discordGuild.id)) ??
       createEmptyGuild(discordGuild.id, discordGuild.name);
     guild.guildName = discordGuild.name;
     guild.discovery = discoverLiveDiscordGuild(discordGuild as unknown as GuildLike, guild.discovery, guild.modules.discovery);
+    const records = new Map(guild.members.map((member) => [member.userId, member]));
+    for (const member of liveMembers.values()) {
+      records.set(member.id, this.createLiveMemberRecord(member, records.get(member.id)));
+    }
+    guild.members = [...records.values()];
     await this.db.saveGuild(guild);
+  }
+
+  private createLiveMemberRecord(member: GuildMember, previous?: Parameters<typeof synchronizeMemberProfile>[0]) {
+    const record = synchronizeMemberProfile(previous, {
+      userId: member.id,
+      username: member.user.username,
+      displayName: member.displayName,
+      avatarUrl: member.displayAvatarURL(),
+      joinedAt: member.joinedAt?.toISOString() ?? previous?.joinedAt ?? new Date().toISOString(),
+    });
+    const roleNames = [...member.roles.cache.values()].map((role) => role.name);
+    record.clanRank = resolveClanRankFromRoleNames(roleNames);
+    record.hasClanRank = record.clanRank !== null;
+    record.verified = roleNames.includes('✅ Verified');
+    return record;
   }
 
   async rescanLiveGuild(
@@ -937,18 +958,7 @@ export class ShadowSlayersBotClient {
       rec.hasClanRank = false;
       rec.verified = false;
     } else {
-      const rec = synchronizeMemberProfile(previous, {
-        userId: member.id,
-        username: member.user.username,
-        displayName: member.displayName,
-        avatarUrl: member.displayAvatarURL(),
-        joinedAt: member.joinedAt?.toISOString() ?? previous?.joinedAt ?? new Date().toISOString(),
-      });
-      const roleNames = [...member.roles.cache.values()].map((r) => r.name);
-      const nextRank = resolveClanRankFromRoleNames(roleNames);
-      rec.clanRank = nextRank;
-      rec.hasClanRank = nextRank !== null;
-      rec.verified = roleNames.includes('✅ Verified');
+      const rec = this.createLiveMemberRecord(member, previous);
       if (index < 0) guildState.members.push(rec);
       else guildState.members[index] = rec;
     }
