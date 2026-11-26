@@ -131,10 +131,10 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [privacyMode, setPrivacyMode] = useState(false);
 
-  const guildId = user?.guildId || 'shadowslayers-primary';
+  const guildId = user?.guildId;
 
   const refreshState = useCallback(async () => {
-    if (!token) return;
+    if (!token || !guildId) return;
     setLoading(true);
     setLoadError(null);
     const [stateResult, healthResult] = await Promise.allSettled([
@@ -193,7 +193,7 @@ export default function App() {
     );
   }
 
-  if (!token || !user) {
+  if (!token || !user || !guildId) {
     return (
       <AuthGate
         onPrivacyRequest={() => setPrivacyMode(true)}

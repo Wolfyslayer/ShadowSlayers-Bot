@@ -10,7 +10,7 @@ import {
   type FirestoreTransactionLike,
 } from '../packages/database/src/firestore-adapter.ts';
 import { createDatabaseAdapter } from '../packages/database/src/adapter.ts';
-import { createInitialGuildSeed } from '../packages/database/src/seed.ts';
+import { createInitialGuildSeed } from './guild-seed-fixture.ts';
 import type { BotControlCommand } from '../packages/shared/src/bot-control.ts';
 import type { GuildState } from '../packages/shared/src/types.ts';
 
@@ -169,6 +169,8 @@ test('FirestoreDatabaseAdapter initializes meta + default guild, isolates guilds
   const alpha = await adapter.getGuild('guild-alpha');
   assert.ok(alpha);
   assert.equal(alpha.guildId, 'guild-alpha');
+  assert.deepEqual(alpha.members, []);
+  assert.deepEqual(alpha.logs, []);
 
   // Save second guild independently and verify strict guild isolation
   const beta = createInitialGuildSeed('guild-beta', 'Beta Citadel');

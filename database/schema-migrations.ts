@@ -5,7 +5,7 @@ import type {
   ResourceLifecycleState,
 } from '../packages/shared/src/types.ts';
 import { LEGACY_ROLE_SPECS } from '../packages/shared/src/legacy-template.ts';
-import { CURRENT_SCHEMA_VERSION, createInitialGuildSeed } from '../packages/database/src/seed.ts';
+import { CURRENT_SCHEMA_VERSION } from '../packages/database/src/empty-guild.ts';
 
 const RANK_NORMALIZATION: Record<string, ClanRankName> = {
   'Shadow King': '👑 Shadow King',
@@ -73,16 +73,7 @@ export function migrateDatabaseRoot(raw: DatabaseRoot): DatabaseRoot {
       if (!guild.discovery.incorrectTypes) guild.discovery.incorrectTypes = [];
       if (!guild.discovery.permissionDifferences) guild.discovery.permissionDifferences = [];
 
-      // If upgrading an un-discovered v1/v2 seed snapshot (zero live Discord IDs), refresh template to canonical v3
-      const hasLiveMappedResources =
-        (guild.discovery.categories ?? []).some((c) => Boolean(c.discordCategoryId)) ||
-        (guild.discovery.roles ?? []).some((r) => Boolean(r.discordRoleId));
-
-      if (prevVersion < 3 && !hasLiveMappedResources) {
-        const canonicalSeed = createInitialGuildSeed(guild.guildId, guild.guildName);
-        guild.discovery = canonicalSeed.discovery;
-        guild.rolePanels = guild.rolePanels?.length ? guild.rolePanels : canonicalSeed.rolePanels;
-      } else {
+      {
         guild.discovery.categories = (guild.discovery.categories ?? []).map((cat) => ({
           ...cat,
           lifecycleState: cat.lifecycleState ?? (cat.discordCategoryId ? 'mapped' : 'proposed'),

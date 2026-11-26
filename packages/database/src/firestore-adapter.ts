@@ -13,7 +13,7 @@ import { anonymizeGuildUserData } from '../../shared/src/guild-privacy.ts';
 import { safeIdSchema } from '../../shared/src/validation.ts';
 import { migrateDatabaseRoot } from '../../../database/schema-migrations.ts';
 import type { DatabaseAdapter } from './adapter.ts';
-import { CURRENT_SCHEMA_VERSION, createInitialGuildSeed } from './seed.ts';
+import { CURRENT_SCHEMA_VERSION, createEmptyGuild } from './empty-guild.ts';
 
 export interface FirestoreDocSnapshotLike {
   exists: boolean;
@@ -269,7 +269,7 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
         }
 
         if (guildId && defaultGuildRef && !defaultGuildSnap?.exists) {
-          const seed = createInitialGuildSeed(guildId);
+          const seed = createEmptyGuild(guildId, guildId);
           await this.writeGuildInsideTransaction(tx, defaultGuildRef, seed, undefined, true);
         }
       });

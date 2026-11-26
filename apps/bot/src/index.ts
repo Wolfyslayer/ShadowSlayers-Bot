@@ -19,7 +19,7 @@ import {
 } from 'discord.js';
 import type { DiscordCommandScope } from '../../../packages/config/src/env.ts';
 import type { DatabaseAdapter } from '../../../packages/database/src/adapter.ts';
-import { createInitialGuildSeed } from '../../../packages/database/src/seed.ts';
+import { createEmptyGuild } from '../../../packages/database/src/empty-guild.ts';
 import type { BotControlCommand, BotRuntimeSnapshot } from '../../../packages/shared/src/bot-control.ts';
 import {
   signBotControlResult,
@@ -320,9 +320,9 @@ export class ShadowSlayersBotClient {
 
   private async synchronizeGuildState(discordGuild: Guild): Promise<void> {
     const guild = (await this.db.getGuild(discordGuild.id)) ??
-      createInitialGuildSeed(discordGuild.id, discordGuild.name);
+      createEmptyGuild(discordGuild.id, discordGuild.name);
     guild.guildName = discordGuild.name;
-    guild.discovery = discoverLiveDiscordGuild(discordGuild as unknown as GuildLike, guild.discovery);
+    guild.discovery = discoverLiveDiscordGuild(discordGuild as unknown as GuildLike, guild.discovery, guild.modules.discovery);
     await this.db.saveGuild(guild);
   }
 

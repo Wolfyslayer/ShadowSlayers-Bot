@@ -9,7 +9,7 @@ import type {
   ScheduledTask,
 } from '../../shared/src/types.ts';
 import type { BotControlCommand, BotRuntimeSnapshot } from '../../shared/src/bot-control.ts';
-import { CURRENT_SCHEMA_VERSION, createInitialGuildSeed } from './seed.ts';
+import { CURRENT_SCHEMA_VERSION, createEmptyGuild } from './empty-guild.ts';
 import { migrateDatabaseRoot } from '../../../database/schema-migrations.ts';
 import { anonymizeGuildUserData } from '../../shared/src/guild-privacy.ts';
 import { FirestoreDatabaseAdapter } from './firestore-adapter.ts';
@@ -62,7 +62,7 @@ export class LocalPersistentAdapter implements DatabaseAdapter {
     this.state = {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       adminAuth: null,
-      guilds: defaultGuildId ? { [defaultGuildId]: createInitialGuildSeed(defaultGuildId) } : {},
+      guilds: defaultGuildId ? { [defaultGuildId]: createEmptyGuild(defaultGuildId, defaultGuildId) } : {},
     };
   }
 

@@ -20,16 +20,18 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 - [ ] Verify CI and artifact build; separately verify approved live deployment and health checks, with rollback instructions.
 - [x] Update AI_WORKFLOW.md and deployment documentation with per-phase deployment requirements, Android procedures and Cloud Run revision rollback.
 - **Acceptance:** mobile-only build/download/upload to Lunafy and manual API deployment to the existing shadowslayers-api service in europe-west4, project shadowslayers-7f48f. No automatic production deploy, direct Codex cloud credentials, hosting migration or unapproved cost increase.
-- **Post-merge verification:** GitHub run 45795227598 successfully published the Lunafy artifact. Cloud Run run 45800401161 succeeded on attempt 2 with the default builder. A follow-up selects a dedicated, least-privilege builder whose live deployment remains pending.
-- **Status:** in progress, 7/8 implementation tasks complete (87.5%). Manual Lunafy packaging and guarded Cloud Run deployment are implemented and documented. Local artifact validation passed; PR CI passed through commit `4b54477`. The new manual workflows cannot be executed from GitHub until merged to the default branch. Cloud IAM/environment setup, live workflow execution, Lunafy upload, Cloud Run deployment and live health/function verification require owner participation and explicit approval.
+- **Post-merge verification:** GitHub run 45795227598 published the Lunafy artifact and the owner confirmed it worked on Lunafy. Run 45802348457 deployed revision `shadowslayers-api-00006-z4k` with the dedicated builder. The live health endpoint reported healthy with Firestore.
+- **Status:** complete, 8/8 tasks. Merged through PR #5.
 
 ### Phase 0.5 – Production data cleanup and empty guild foundation
-- [ ] Replace production use of `createInitialGuildSeed()` with a minimal, schema-valid empty guild factory.
-- [ ] Remove all fabricated members, moderation cases, warnings, appeals, logs, tickets, onboarding records, polls, giveaways, events, XP and example language content from production initialization.
-- [ ] Remove the hardcoded `shadowslayers-primary` fallback from dashboard guild selection; require an authenticated, authorized guild.
-- [ ] Keep test fixtures isolated under tests and make production imports unable to seed fixture records.
-- [ ] Preserve schema defaults and safe empty arrays/configuration; do not confuse technical defaults with demo content.
-- [ ] Audit existing Firestore documents for seeded/demo data; produce a backup and a record-level cleanup plan before any deletion.
+- The CLI preview found 17 and 8 matching entries in the two approved test guilds. The owner completed the export, waived the restore test for this cleanup only, and reported zero matching entries in the post-cleanup preview.
+- **Status:** implementation, automated regression checks and the fresh-guild live acceptance check passed. The owner confirmed cleanup for both scoped test guilds. The Lunafy PR build (`c12b0d6`) initialized a new Discord test guild. The read-only Firestore check reported zero failures for guild identity, empty activity lists, empty template proposals, Discord ID format and absence of scheduled tasks. See [Firestore inventory and cleanup](docs/FIRESTORE_CLEANUP.md).
+- [x] Replace production use of `createInitialGuildSeed()` with a minimal, schema-valid empty guild factory.
+- [x] Remove all fabricated members, moderation cases, warnings, appeals, logs, tickets, onboarding records, polls, giveaways, events, XP and example language content from production initialization.
+- [x] Remove the hardcoded `shadowslayers-primary` fallback from dashboard guild selection; require an authenticated, authorized guild.
+- [x] Keep test fixtures isolated under tests and make production imports unable to seed fixture records.
+- [x] Preserve schema defaults and safe empty arrays/configuration; do not confuse technical defaults with demo content.
+- [x] Audit Firestore records in the two approved test guilds, export a backup and prepare a record-level cleanup plan before deletion.
 - **Acceptance:** a newly installed guild has zero fabricated records and only real Discord information; existing production data is not deleted or rewritten.
 - **Tests:** empty-guild factory, no production seed imports, no default guild fallback, migration and Firestore regression tests.
 

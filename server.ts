@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { loadEnv } from './packages/config/src/env.ts';
 import { createDatabaseAdapter } from './packages/database/src/adapter.ts';
-import { createInitialGuildSeed } from './packages/database/src/seed.ts';
+import { createEmptyGuild } from './packages/database/src/empty-guild.ts';
 import {
   calculateCompleteness,
   createLanguageDraft,
@@ -736,7 +736,7 @@ async function bootstrap() {
 
         let guild = await db.getGuild(oauthGuild.id);
         if (!guild) {
-          guild = createInitialGuildSeed(oauthGuild.id, liveAccess.name);
+          guild = createEmptyGuild(oauthGuild.id, liveAccess.name);
           await db.saveGuild(guild);
         } else if (guild.guildName !== liveAccess.name) {
           guild.guildName = liveAccess.name;

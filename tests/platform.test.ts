@@ -32,7 +32,7 @@ import { PersistentTaskScheduler } from '../apps/bot/src/services/scheduler.ts';
 import { evaluateXpAward } from '../apps/bot/src/services/xp.ts';
 import { migrateDatabaseRoot } from '../database/schema-migrations.ts';
 import { LocalPersistentAdapter, createDatabaseAdapter } from '../packages/database/src/adapter.ts';
-import { createInitialGuildSeed } from '../packages/database/src/seed.ts';
+import { createInitialGuildSeed } from './guild-seed-fixture.ts';
 import { normalizeGameLabels } from '../packages/shared/src/game-config.ts';
 import {
   BASE_TRANSLATION_KEYS,
@@ -1014,6 +1014,7 @@ test('Slash command parity, Discord.js schema options, subcommand extraction, an
   const tmpFile = path.join(os.tmpdir(), `shadowslayers-cmd-${Date.now()}.json`);
   const db = new LocalPersistentAdapter(tmpFile, 'shadowslayers-primary');
   await db.init();
+  await db.saveGuild(createInitialGuildSeed());
 
   const baseCtx = {
     guildId: 'shadowslayers-primary',

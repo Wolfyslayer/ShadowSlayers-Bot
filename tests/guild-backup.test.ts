@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createInitialGuildSeed } from '../packages/database/src/seed.ts';
+import { createInitialGuildSeed } from './guild-seed-fixture.ts';
 import { createGuildBackupExport } from '../packages/shared/src/guild-backup.ts';
 
 test('guild backup loads and returns only the requested guild', async () => {
