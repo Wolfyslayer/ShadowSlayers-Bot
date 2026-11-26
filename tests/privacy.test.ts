@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createInitialGuildSeed } from '../packages/database/src/seed.ts';
+import { createInitialGuildSeed } from './guild-seed-fixture.ts';
 import { anonymizeGuildUserData } from '../packages/shared/src/guild-privacy.ts';
 import {
   signPrivacyDeletionToken,

@@ -1,18 +1,17 @@
-import type { DiscoveredCategory, DiscoveredChannel, GuildRoleRecord, GuildState } from '../../shared/src/types.ts';
+import type { DiscoveredCategory, DiscoveredChannel, GuildRoleRecord, GuildState } from '../packages/shared/src/types.ts';
 import {
   LEGACY_CATEGORY_SPECS,
   LEGACY_CHANNEL_SPECS,
   LEGACY_ROLE_SPECS,
   OPTIONAL_EXTENSION_CHANNELS,
-} from '../../shared/src/legacy-template.ts';
+} from '../packages/shared/src/legacy-template.ts';
 import {
   BASE_TRANSLATION_KEYS,
   DEFAULT_CHANNEL_TEMPLATES,
   RUSSIAN_TRANSLATIONS,
-} from '../../localization/src/engine.ts';
+} from '../packages/localization/src/engine.ts';
 
-import { CURRENT_SCHEMA_VERSION } from './empty-guild.ts';
-export { CURRENT_SCHEMA_VERSION } from './empty-guild.ts';
+import { CURRENT_SCHEMA_VERSION } from '../packages/database/src/empty-guild.ts';
 
 export function createInitialGuildSeed(
   guildId = 'shadowslayers-primary',

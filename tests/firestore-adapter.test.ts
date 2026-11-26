@@ -10,7 +10,7 @@ import {
   type FirestoreTransactionLike,
 } from '../packages/database/src/firestore-adapter.ts';
 import { createDatabaseAdapter } from '../packages/database/src/adapter.ts';
-import { createInitialGuildSeed } from '../packages/database/src/seed.ts';
+import { createInitialGuildSeed } from './guild-seed-fixture.ts';
 import type { BotControlCommand } from '../packages/shared/src/bot-control.ts';
 import type { GuildState } from '../packages/shared/src/types.ts';
 

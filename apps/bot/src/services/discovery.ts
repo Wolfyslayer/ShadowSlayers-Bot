@@ -265,6 +265,7 @@ export function resolveChannelMatch(
 export function discoverLiveDiscordGuild(
   discordGuild: GuildLike,
   existingSnapshot: ServerDiscoverySnapshot,
+  includeLegacyTemplate = true,
 ): ServerDiscoverySnapshot {
   const now = new Date().toISOString();
   const rawRoles = iterateValues(discordGuild.roles.cache);
@@ -281,7 +282,7 @@ export function discoverLiveDiscordGuild(
   const matchedExistingRoleIds = new Set<string>();
   const roles: GuildRoleRecord[] = [];
 
-  for (const spec of LEGACY_ROLE_SPECS) {
+  for (const spec of includeLegacyTemplate ? LEGACY_ROLE_SPECS : []) {
     const res = resolveRoleMatch(spec, rawRoles);
     if (res.status === 'mapped' && res.matched) {
       matchedExistingRoleIds.add(res.matched.id);
@@ -393,7 +394,7 @@ export function discoverLiveDiscordGuild(
   // First pass: resolve categories
   const resolvedCategoryByKey = new Map<string, ChannelLike | null>();
   const categoryStateByKey = new Map<string, MatchResolution<ChannelLike>>();
-  for (const catSpec of LEGACY_CATEGORY_SPECS) {
+  for (const catSpec of includeLegacyTemplate ? LEGACY_CATEGORY_SPECS : []) {
     const catRes = resolveCategoryMatch(catSpec, rawCategories);
     categoryStateByKey.set(catSpec.key, catRes);
     if (catRes.status === 'mapped' && catRes.matched) {
@@ -405,7 +406,7 @@ export function discoverLiveDiscordGuild(
   }
 
   // Second pass: resolve channels, preferring expected category first, then checking whole guild for misplacement
-  for (const catSpec of LEGACY_CATEGORY_SPECS) {
+  for (const catSpec of includeLegacyTemplate ? LEGACY_CATEGORY_SPECS : []) {
     const catRes = categoryStateByKey.get(catSpec.key)!;
     const existingCat = resolvedCategoryByKey.get(catSpec.key) ?? null;
     const catChannelsSpec = LEGACY_CHANNEL_SPECS.filter((ch) => ch.categoryName === catSpec.name);
@@ -624,7 +625,7 @@ export function discoverLiveDiscordGuild(
       lifecycleState: 'discovered',
     }));
 
-  const optionalChannels: DiscoveredChannel[] = OPTIONAL_EXTENSION_CHANNELS.map((ext) => {
+  const optionalChannels: DiscoveredChannel[] = (includeLegacyTemplate ? OPTIONAL_EXTENSION_CHANNELS : []).map((ext) => {
     const matched = resolveChannelMatch(ext, nonCategoryChannels);
     return {
       id: ext.key,
@@ -646,13 +647,13 @@ export function discoverLiveDiscordGuild(
   });
 
   const permissionDifferences = auditGuildPermissions(categories, roles, discordGuild.id);
-  const proposedChanges = computeNonDestructiveDiff(
+  const proposedChanges = includeLegacyTemplate ? computeNonDestructiveDiff(
     categories,
     roles,
     incorrectPlacements,
     incorrectTypes,
     permissionDifferences,
-  );
+  ) : [];
   const conflictsCount = proposedChanges.filter((c) => c.status === 'conflicting').length;
   const missingCount = proposedChanges.filter(
     (c) => c.status === 'proposed' || c.status === 'missing' || c.status === 'requires_manual_setup',
