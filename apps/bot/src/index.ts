@@ -20,6 +20,7 @@ import {
 import type { DiscordCommandScope } from '../../../packages/config/src/env.ts';
 import type { DatabaseAdapter } from '../../../packages/database/src/adapter.ts';
 import { createEmptyGuild } from '../../../packages/database/src/empty-guild.ts';
+import { synchronizeMemberProfile } from './services/member-sync.ts';
 import type { BotControlCommand, BotRuntimeSnapshot } from '../../../packages/shared/src/bot-control.ts';
 import {
   signBotControlResult,
@@ -925,21 +926,31 @@ export class ShadowSlayersBotClient {
     const guildId = member.guild.id;
     const guildState = await this.db.getGuild(guildId);
     if (!guildState) return;
-    const rec = guildState.members.find((m) => m.userId === member.id);
-    if (!rec) return;
+    const index = guildState.members.findIndex((m) => m.userId === member.id);
+    const previous = guildState.members[index];
 
     if (departed) {
+      if (!previous) return;
+      const rec = previous;
       rec.isDeparted = true;
       rec.clanRank = null;
       rec.hasClanRank = false;
       rec.verified = false;
     } else {
+      const rec = synchronizeMemberProfile(previous, {
+        userId: member.id,
+        username: member.user.username,
+        displayName: member.displayName,
+        avatarUrl: member.displayAvatarURL(),
+        joinedAt: member.joinedAt?.toISOString() ?? previous?.joinedAt ?? new Date().toISOString(),
+      });
       const roleNames = [...member.roles.cache.values()].map((r) => r.name);
       const nextRank = resolveClanRankFromRoleNames(roleNames);
       rec.clanRank = nextRank;
       rec.hasClanRank = nextRank !== null;
       rec.verified = roleNames.includes('✅ Verified');
-      rec.isDeparted = false;
+      if (index < 0) guildState.members.push(rec);
+      else guildState.members[index] = rec;
     }
     await this.db.saveGuild(guildState);
   }
@@ -1077,8 +1088,14 @@ export class ShadowSlayersBotClient {
       });
     });
 
+    const refreshMember = (member: GuildMember) => {
+      void this.syncLiveMemberRolesToDb(member).catch((err) => {
+        console.error(`[ShadowSlayers] Member synchronization failed for guild ${member.guild.id}:`, err);
+      });
+    };
+    this.client.on(Events.GuildMemberAdd, refreshMember);
     this.client.on(Events.GuildMemberUpdate, (_oldMember, newMember) => {
-      void this.syncLiveMemberRolesToDb(newMember, false);
+      refreshMember(newMember);
     });
 
     this.client.on(Events.GuildCreate, (guild) => {
