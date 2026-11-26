@@ -16,6 +16,11 @@
 5. Run the relevant checks after each meaningful commit. Wait for normal GitHub Actions CI to pass before making the next commit.
 6. Do not merge a pull request, deploy, publish slash-command changes or perform live service changes without explicit user approval.
 7. After an approved merge, tell the user whether they need to run `git pull origin main` and whether a bot rebuild/re-upload or dashboard/API deployment is required.
+8. Break every phase into explicit main tasks and subtasks, and keep a complete phase checklist in progress reports.
+9. Update `ROADMAP.md` in every commit so repository status and the commit's actual verification state stay synchronized.
+10. After pushing each commit, verify GitHub Actions for that exact commit. Continue automatically within the active phase only after CI is green; investigate and fix failures before proceeding.
+11. Never weaken, skip, or delete tests or security checks merely to make CI pass. Add regression coverage for every defect discovered.
+12. When a phase is complete, stop for explicit owner approval before merge. Continue with the next phase only after the approved merge is present on `main`.
 
 ## 3. Data and multi-guild safety
 1. Treat every guild as an isolated tenant. Every database query, queue item, cache key, scheduled task, log and command must be scoped to a verified `guildId`.
@@ -65,15 +70,40 @@
 2. Update architecture/API/database/security/command/module docs when contracts change.
 3. Record operational requirements and whether a bot rebuild, API deployment or dashboard deployment is required.
 4. Report each commit with:
+   - active phase, PR number and full commit ID,
    - what changed,
-   - files changed,
+   - the complete list of files changed,
    - tests run and results,
+   - CI status for that commit,
    - phase checklist (completed/total and percentage),
    - outstanding risks or blockers.
+5. Show separate, truthful progress bars for main tasks and subtasks using `█████░░░░░ 5/10 (50%)` style. Count only work actually completed.
+6. Distinguish clearly between implemented, automatically tested, verified in a real service, reviewed/approved, and deployed. Code presence or mock-only tests never prove live functionality.
+7. At phase completion, publish an update matrix with YES/NO for: new bot build, Lunafy upload, bot restart, Cloud Run API deploy, dashboard deploy, Firebase changes, database migration, new environment variables, Discord permission changes, and manual functional tests.
+8. Give exact mobile-friendly Android instructions for every owner action, including build download/upload, deployment approval, rollback, provider configuration, and verification.
 
-## 8. Project constraints
+## 8. Deployment and release controls
+1. Production workflows must be manual (`workflow_dispatch`). Never add an automatic production deployment.
+2. Production Cloud Run deployment is allowed only from `main`, must use a protected GitHub `production` environment, must prevent concurrent deployments, and must use GitHub OIDC/Google Workload Identity Federation with least privilege. Never use a service-account key.
+3. Preserve the existing hosting split: Lunafy for the bot, Cloud Run for the API, the existing dashboard host, and Firestore for persistence. Do not change hosting, domain, DNS, Cloudflare, service URL, runtime identity, secrets, environment variables, scaling, or other production configuration unless the phase requires it and the owner explicitly approves it.
+4. A Cloud Run image-only deployment must target project `shadowslayers-7f48f`, service `shadowslayers-api`, region `europe-west4`, preserve service configuration, verify `/api/health`, and document revision rollback.
+5. A Lunafy artifact must be built with Node.js 22 and `npm ci`, pass security/type/test/startup gates, use `MAIN_FILE=dist-bot/index.js`, include `dist-bot`, `package.json`, `package-lock.json`, and only required runtime files, and exclude `node_modules`, secrets, keys, `.env` files, tests, and development-only sources.
+6. No Codex/CI access to Google Cloud, Firebase, Discord, or Lunafy credentials is required. Live deployment and live tests remain owner-approved, separately reported operations.
+7. Never create new recurring costs without explicit owner approval. Apply least privilege and prefer reversible, low-cost operations.
+
+## 9. Product requirements
+1. Remove mock/demo data from production paths and dashboard behavior; fixtures may exist only in isolated tests. New guilds start empty and use real Discord state.
+2. Keep every guild's settings, members, modules, commands, roles, permissions, jobs, logs, and data strictly isolated. Convert ShadowSlayers-specific behavior into generic behavior or optional modules/templates.
+3. Dashboard features must work end-to-end across UI, API, persistence, queue/bot, and Discord, with truthful status at every boundary.
+4. A new installation must receive one safe welcome message. `/setup` must use a secure, short-lived handoff that authenticates the correct user and preselects only an authorized guild.
+5. The server template maker must support create, edit, preview/diff, and safe idempotent application. Administrators must be able to enable/disable modules and built-in commands independently per guild.
+6. Custom commands must be source-code-free, guild-scoped, validated, auditable, and restricted to allowlisted actions. Preserve and improve multilingual support.
+7. Do not add AI or LLM functionality to the bot or dashboard.
+
+## 10. Project constraints
 - No AI/LLM features, AI moderation, AI translation or AI dependencies.
 - Never commit secrets or production data.
 - Keep the current hosting arrangement unless a roadmap task and explicit user approval authorize a change.
 - Prefer low-cost, reversible changes and avoid unnecessary rewrites.
 - Preserve user data and existing server structures by default.
+- Never delete or overwrite production data without a verified backup, documented record-level migration plan, and explicit owner approval.
