@@ -24,7 +24,7 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 - **Status:** complete, 8/8 tasks. Merged through PR #5.
 
 ### Phase 0.5 – Production data cleanup and empty guild foundation
-- A read-only CLI preview using Application Default Credentials is available for the two operator-approved test guilds. Live inventory and backup verification remain pending.
+- The CLI preview found 17 and 8 matching entries in the two approved test guilds. The owner accepted the untested export for this one cleanup. The guarded apply step remains pending.
 - **Status:** implementation and automated regression checks passed. Production initialization uses the empty factory and legacy fixtures are test-only. See [Firestore inventory and cleanup](docs/FIRESTORE_CLEANUP.md). A live inventory, verified backup and live fresh-guild verification remain outstanding.
 - [x] Replace production use of `createInitialGuildSeed()` with a minimal, schema-valid empty guild factory.
 - [x] Remove all fabricated members, moderation cases, warnings, appeals, logs, tickets, onboarding records, polls, giveaways, events, XP and example language content from production initialization.
