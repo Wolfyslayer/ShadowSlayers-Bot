@@ -215,7 +215,22 @@ gcloud iam workload-identity-pools providers describe shadowslayers \
   --format='value(name)'
 ```
 
-Grant no Secret Manager accessor or Firestore role to the deployer: it deploys the source and may impersonate only the existing API runtime identity; the runtime identity keeps its existing data/secret access. If Cloud Run source deployment reports that the deployer cannot use the project, add `roles/serviceusage.serviceUsageConsumer` to only this deployer. If it reports that the Cloud Build service agent cannot read/write the existing source-deploy Artifact Registry repository, correct that agent/repository binding rather than granting the GitHub deployer secret or database access.
+The workflow selects a dedicated builder. Create it once and grant the deployer permission to use that specific account:
+
+```sh
+PROJECT_ID=shadowslayers-7f48f
+BUILD_SA="shadowslayers-api-build@${PROJECT_ID}.iam.gserviceaccount.com"
+DEPLOY_SA="github-shadowslayers-deployer@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud iam service-accounts create shadowslayers-api-build --project="$PROJECT_ID" &&
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:${BUILD_SA}" --role=roles/run.builder &&
+gcloud iam service-accounts add-iam-policy-binding "$BUILD_SA" \
+  --project="$PROJECT_ID" \
+  --member="serviceAccount:${DEPLOY_SA}" --role=roles/iam.serviceAccountUser
+```
+
+Give the deployer `roles/serviceusage.serviceUsageConsumer` on this project. Keep Firestore and Secret Manager permissions on the API runtime identity. Scope the deployer's Service Account User grants to the dedicated builder and existing runtime identity.
 
 On GitHub mobile: open **Settings → Environments → New environment**, create `production`, configure required reviewer and `main`; then open **Settings → Secrets and variables → Actions → Variables** and add the two values above. Do not add a JSON key.
 

@@ -89,6 +89,7 @@ jobs:
           set -euo pipefail
           gcloud run deploy "$CLOUD_RUN_SERVICE" \
             --source . \
+            --build-service-account "projects/$GCP_PROJECT_ID/serviceAccounts/shadowslayers-api-build@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
             --project "$GCP_PROJECT_ID" \
             --region "$CLOUD_RUN_REGION" \
             --quiet
