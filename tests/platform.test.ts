@@ -1014,6 +1014,7 @@ test('Slash command parity, Discord.js schema options, subcommand extraction, an
   const tmpFile = path.join(os.tmpdir(), `shadowslayers-cmd-${Date.now()}.json`);
   const db = new LocalPersistentAdapter(tmpFile, 'shadowslayers-primary');
   await db.init();
+  await db.saveGuild(createInitialGuildSeed());
 
   const baseCtx = {
     guildId: 'shadowslayers-primary',
