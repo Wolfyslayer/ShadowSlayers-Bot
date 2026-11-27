@@ -432,7 +432,7 @@ async function bootstrap() {
   });
   app.use(express.json({ limit: '1mb' }));
 
-  const requireAuth = (capability?: PermissionCapability) => {
+  const requireAuth = (capability?: PermissionCapability, module?: keyof import('./packages/shared/src/types.ts').GuildModulesConfig) => {
     return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       const authHeader = req.headers.authorization || '';
       const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
@@ -476,6 +476,22 @@ async function bootstrap() {
           )
         ) {
           res.status(403).json({ error: `Missing Discord permission for dashboard capability: ${capability}` });
+          return;
+        }
+      }
+      if (module) {
+        try {
+          const guild = await db.getGuild(targetGuildId);
+          if (!guild) {
+            res.status(404).json({ error: 'Guild not found' });
+            return;
+          }
+          if (guild.modules?.[module] !== true) {
+            res.status(403).json({ error: 'This module is disabled for this guild.' });
+            return;
+          }
+        } catch {
+          res.status(503).json({ error: 'Could not verify the guild module configuration. Retry shortly.' });
           return;
         }
       }
@@ -881,7 +897,7 @@ async function bootstrap() {
   });
 
   // Discovery: Non-destructive rescan & explicit confirmation
-  app.post('/api/guild/:guildId/discovery/rescan', requireAuth('discovery.view'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/discovery/rescan', requireAuth('discovery.view', 'discovery'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
@@ -911,7 +927,7 @@ async function bootstrap() {
     res.json({ discovery: guild.discovery, liveDiscord: true });
   });
 
-  app.post('/api/guild/:guildId/discovery/confirm', requireAuth('discovery.apply'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/discovery/confirm', requireAuth('discovery.apply', 'discovery'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
@@ -958,7 +974,7 @@ async function bootstrap() {
   });
 
   // Dynamic Language Management (Zero AI)
-  app.post('/api/guild/:guildId/languages', requireAuth('languages.manage'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/languages', requireAuth('languages.manage', 'multilingual'), async (req: AuthenticatedRequest, res) => {
     const parsed = languageCreateSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid language payload' });
@@ -1022,7 +1038,7 @@ async function bootstrap() {
     });
   });
 
-  app.patch('/api/guild/:guildId/languages/:code/translations', requireAuth('languages.manage'), async (req: AuthenticatedRequest, res) => {
+  app.patch('/api/guild/:guildId/languages/:code/translations', requireAuth('languages.manage', 'multilingual'), async (req: AuthenticatedRequest, res) => {
     const parsed = translationUpdateSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Invalid translation update payload' });
@@ -1065,7 +1081,7 @@ async function bootstrap() {
     res.json({ language: lang, bundle, completeness: calculateCompleteness(lang, bundle) });
   });
 
-  app.post('/api/guild/:guildId/languages/:code/review', requireAuth('languages.approve'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/languages/:code/review', requireAuth('languages.approve', 'multilingual'), async (req: AuthenticatedRequest, res) => {
     const parsed = languageReviewSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Invalid review payload' });
@@ -1107,7 +1123,7 @@ async function bootstrap() {
     res.json({ language: lang, completeness: calculateCompleteness(lang, guild.translations[code]) });
   });
 
-  app.post('/api/guild/:guildId/languages/:code/create-channels', requireAuth('languages.approve'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/languages/:code/create-channels', requireAuth('languages.approve', 'multilingual'), async (req: AuthenticatedRequest, res) => {
     if (req.body?.confirmed !== true) {
       res.status(400).json({ error: 'Explicit administrator confirmation is required to create language channels.' });
       return;
@@ -1231,7 +1247,7 @@ async function bootstrap() {
     res.json({ language: lang, discovery: guild.discovery, liveDiscord: true });
   });
 
-  app.post('/api/guild/:guildId/languages/:code/toggle', requireAuth('languages.manage'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/languages/:code/toggle', requireAuth('languages.manage', 'multilingual'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     const code = req.params.code.toLowerCase();
     const lang = guild?.languages.find((l) => l.code === code);
@@ -1340,7 +1356,7 @@ async function bootstrap() {
   });
 
   // Role Panels & Safe Publish
-  app.post('/api/guild/:guildId/role-panels', requireAuth('roles.publish'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/role-panels', requireAuth('roles.publish', 'roles'), async (req: AuthenticatedRequest, res) => {
     const parsed = rolePanelCreateSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid role panel payload' });
@@ -1370,7 +1386,7 @@ async function bootstrap() {
     res.status(201).json({ panel });
   });
 
-  app.post('/api/guild/:guildId/role-panels/:panelId/publish', requireAuth('roles.publish'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/role-panels/:panelId/publish', requireAuth('roles.publish', 'roles'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     const panel = guild?.rolePanels.find((p) => p.id === req.params.panelId);
     if (!guild || !panel) {
@@ -1427,7 +1443,7 @@ async function bootstrap() {
   });
 
   // Rules Gate Publishing & 5-Step Onboarding Status / Actions
-  app.post('/api/guild/:guildId/rules/publish', requireAuth('roles.publish'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/rules/publish', requireAuth('roles.publish', 'onboarding'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
@@ -1487,7 +1503,7 @@ async function bootstrap() {
     res.json({ onboarding: guild.onboarding, liveDiscord: true });
   });
 
-  app.get('/api/guild/:guildId/onboarding', requireAuth('overview.view'), async (req: AuthenticatedRequest, res) => {
+  app.get('/api/guild/:guildId/onboarding', requireAuth('overview.view', 'onboarding'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
@@ -1518,7 +1534,7 @@ async function bootstrap() {
     });
   });
 
-  app.post('/api/guild/:guildId/onboarding/:userId/verify-rules', requireAuth('members.edit'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/onboarding/:userId/verify-rules', requireAuth('members.edit', 'onboarding'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     const member = guild?.members.find((m) => m.userId === req.params.userId);
     if (!guild || !member) {
@@ -1570,7 +1586,7 @@ async function bootstrap() {
     res.json({ member, record: outcome.record, verified: outcome.verified, liveDiscord: true });
   });
 
-  app.post('/api/guild/:guildId/onboarding/:userId/active-player', requireAuth('members.edit'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/onboarding/:userId/active-player', requireAuth('members.edit', 'onboarding'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     const member = guild?.members.find((m) => m.userId === req.params.userId);
     if (!guild || !member) {
@@ -1639,7 +1655,7 @@ async function bootstrap() {
   });
 
   // Moderation & Appeals
-  app.post('/api/guild/:guildId/moderation', requireAuth('moderation.execute'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/moderation', requireAuth('moderation.execute', 'moderation'), async (req: AuthenticatedRequest, res) => {
     const parsed = moderationActionSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid moderation payload' });
@@ -1762,7 +1778,7 @@ async function bootstrap() {
     res.status(201).json({ modCase });
   });
 
-  app.post('/api/guild/:guildId/appeals/:appealId/review', requireAuth('moderation.execute'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/appeals/:appealId/review', requireAuth('moderation.execute', 'moderation'), async (req: AuthenticatedRequest, res) => {
     const parsed = appealReviewSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Invalid appeal review payload' });
@@ -1797,7 +1813,7 @@ async function bootstrap() {
   });
 
   // AutoMod config & deterministic rule simulator
-  app.put('/api/guild/:guildId/automod', requireAuth('automod.manage'), async (req: AuthenticatedRequest, res) => {
+  app.put('/api/guild/:guildId/automod', requireAuth('automod.manage', 'automod'), async (req: AuthenticatedRequest, res) => {
     const parsed = automodUpdateSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid AutoMod settings' });
@@ -1821,7 +1837,7 @@ async function bootstrap() {
     res.json({ automod: guild.automod });
   });
 
-  app.post('/api/guild/:guildId/automod/test', requireAuth('automod.manage'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/automod/test', requireAuth('automod.manage', 'automod'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
@@ -1839,7 +1855,7 @@ async function bootstrap() {
   });
 
   // AutoMod False-Positive Reports
-  app.post('/api/guild/:guildId/automod/false-positives', requireAuth('overview.view'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/automod/false-positives', requireAuth('overview.view', 'automod'), async (req: AuthenticatedRequest, res) => {
     const parsed = falsePositiveCreateSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid false-positive report payload' });
@@ -1876,7 +1892,7 @@ async function bootstrap() {
     res.status(201).json({ report });
   });
 
-  app.patch('/api/guild/:guildId/automod/false-positives/:id', requireAuth('automod.manage'), async (req: AuthenticatedRequest, res) => {
+  app.patch('/api/guild/:guildId/automod/false-positives/:id', requireAuth('automod.manage', 'automod'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     const report = guild?.falsePositiveReports.find((r) => r.id === req.params.id);
     if (!guild || !report) {
@@ -1900,7 +1916,7 @@ async function bootstrap() {
   });
 
   // Deterministic Custom Responses (Zero AI)
-  app.post('/api/guild/:guildId/custom-responses', requireAuth('community.manage'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/custom-responses', requireAuth('community.manage', 'community'), async (req: AuthenticatedRequest, res) => {
     const parsed = customResponseCreateSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid custom response payload' });
@@ -1934,7 +1950,7 @@ async function bootstrap() {
     res.status(201).json({ rule });
   });
 
-  app.delete('/api/guild/:guildId/custom-responses/:id', requireAuth('community.manage'), async (req: AuthenticatedRequest, res) => {
+  app.delete('/api/guild/:guildId/custom-responses/:id', requireAuth('community.manage', 'community'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
@@ -1951,7 +1967,7 @@ async function bootstrap() {
   });
 
   // Logging Config
-  app.put('/api/guild/:guildId/logging/config', requireAuth('logging.manage'), async (req: AuthenticatedRequest, res) => {
+  app.put('/api/guild/:guildId/logging/config', requireAuth('logging.manage', 'logging'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
@@ -1977,7 +1993,7 @@ async function bootstrap() {
   });
 
   // Tickets
-  app.post('/api/guild/:guildId/tickets', requireAuth('tickets.view'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/tickets', requireAuth('tickets.view', 'tickets'), async (req: AuthenticatedRequest, res) => {
     const parsed = ticketCreateSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid ticket payload' });
@@ -2030,7 +2046,7 @@ async function bootstrap() {
     res.status(201).json({ ticket });
   });
 
-  app.post('/api/guild/:guildId/tickets/:ticketId/messages', requireAuth('tickets.view'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/tickets/:ticketId/messages', requireAuth('tickets.view', 'tickets'), async (req: AuthenticatedRequest, res) => {
     const parsed = ticketMessageSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Message content is required.' });
@@ -2058,7 +2074,7 @@ async function bootstrap() {
     res.json({ ticket });
   });
 
-  app.post('/api/guild/:guildId/tickets/:ticketId/action', requireAuth('tickets.manage'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/tickets/:ticketId/action', requireAuth('tickets.manage', 'tickets'), async (req: AuthenticatedRequest, res) => {
     const parsed = ticketActionSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Invalid ticket action' });
@@ -2102,7 +2118,7 @@ async function bootstrap() {
   });
 
   // Recruitment
-  app.post('/api/guild/:guildId/recruitment/apply', requireAuth('overview.view'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/recruitment/apply', requireAuth('overview.view', 'recruitment'), async (req: AuthenticatedRequest, res) => {
     const parsed = recruitmentSubmitSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Invalid application payload' });
@@ -2141,7 +2157,7 @@ async function bootstrap() {
     res.status(201).json({ application });
   });
 
-  app.post('/api/guild/:guildId/recruitment/:appId/review', requireAuth('recruitment.review'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/recruitment/:appId/review', requireAuth('recruitment.review', 'recruitment'), async (req: AuthenticatedRequest, res) => {
     const parsed = recruitmentReviewSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Invalid review payload' });
@@ -2171,7 +2187,7 @@ async function bootstrap() {
   });
 
   // Community features
-  app.post('/api/guild/:guildId/community/suggestions', requireAuth('overview.view'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/community/suggestions', requireAuth('overview.view', 'community'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
@@ -2199,7 +2215,7 @@ async function bootstrap() {
     res.status(201).json({ suggestion: item });
   });
 
-  app.post('/api/guild/:guildId/community/suggestions/:id/vote', requireAuth('overview.view'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/community/suggestions/:id/vote', requireAuth('overview.view', 'community'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     const sug = guild?.suggestions.find((s) => s.id === req.params.id);
     if (!guild || !sug) {
@@ -2216,7 +2232,7 @@ async function bootstrap() {
     res.json({ suggestion: sug });
   });
 
-  app.post('/api/guild/:guildId/community/polls', requireAuth('community.manage'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/community/polls', requireAuth('community.manage', 'community'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
@@ -2243,7 +2259,7 @@ async function bootstrap() {
     res.status(201).json({ poll });
   });
 
-  app.post('/api/guild/:guildId/community/polls/:id/vote', requireAuth('overview.view'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/community/polls/:id/vote', requireAuth('overview.view', 'community'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     const poll = guild?.polls.find((p) => p.id === req.params.id);
     if (!guild || !poll) {
@@ -2260,7 +2276,7 @@ async function bootstrap() {
     res.json({ poll });
   });
 
-  app.post('/api/guild/:guildId/community/giveaways', requireAuth('community.manage'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/community/giveaways', requireAuth('community.manage', 'community'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
@@ -2303,7 +2319,7 @@ async function bootstrap() {
     res.status(201).json({ giveaway: gw });
   });
 
-  app.post('/api/guild/:guildId/community/events', requireAuth('community.manage'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/community/events', requireAuth('community.manage', 'community'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
@@ -2347,7 +2363,7 @@ async function bootstrap() {
     res.status(201).json({ event: ev });
   });
 
-  app.post('/api/guild/:guildId/community/announcements', requireAuth('community.manage'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/community/announcements', requireAuth('community.manage', 'community'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
@@ -2393,7 +2409,7 @@ async function bootstrap() {
   });
 
   // Clan & Gaming Management (game-agnostic)
-  app.post('/api/guild/:guildId/clan/games', requireAuth('clan.manage'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/clan/games', requireAuth('clan.manage', 'clan'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
@@ -2419,7 +2435,7 @@ async function bootstrap() {
     res.status(201).json({ game });
   });
 
-  app.patch('/api/guild/:guildId/clan/games/:gameId', requireAuth('clan.manage'), async (req: AuthenticatedRequest, res) => {
+  app.patch('/api/guild/:guildId/clan/games/:gameId', requireAuth('clan.manage', 'clan'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
@@ -2460,7 +2476,7 @@ async function bootstrap() {
     res.json({ game });
   });
 
-  app.post('/api/guild/:guildId/clan/teams', requireAuth('clan.manage'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/clan/teams', requireAuth('clan.manage', 'clan'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
@@ -2492,7 +2508,7 @@ async function bootstrap() {
     res.status(201).json({ team });
   });
 
-  app.post('/api/guild/:guildId/clan/raids', requireAuth('clan.manage'), async (req: AuthenticatedRequest, res) => {
+  app.post('/api/guild/:guildId/clan/raids', requireAuth('clan.manage', 'clan'), async (req: AuthenticatedRequest, res) => {
     const guild = await db.getGuild(req.params.guildId);
     if (!guild) {
       res.status(404).json({ error: 'Guild not found' });
