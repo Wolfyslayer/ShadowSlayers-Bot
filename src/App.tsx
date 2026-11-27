@@ -87,6 +87,13 @@ const GUILD_TOOLS_NAV = [
   { id: 'commands', label: 'Commands', icon: Terminal },
 ];
 
+const TAB_MODULE: Partial<Record<string, keyof GuildModulesConfig>> = {
+  discovery: 'discovery', channels: 'discovery', roles: 'roles',
+  tickets: 'tickets', support: 'tickets', moderation: 'moderation', automod: 'automod',
+  statistics: 'progression', logging: 'logging', languages: 'multilingual',
+  recruitment: 'recruitment', community: 'community', clan: 'clan',
+};
+
 type ConnectionState = 'checking' | 'online' | 'offline';
 
 interface ApiHealthResponse {
@@ -120,7 +127,7 @@ export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUserSession | null>(null);
   const [guildOptions, setGuildOptions] = useState<GuildOption[]>([]);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [requestedTab, setActiveTab] = useState('overview');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [data, setData] = useState<GuildStateResponse | null>(null);
@@ -205,7 +212,14 @@ export default function App() {
     );
   }
 
-  const allNavItems = [...PRIMARY_NAV, ...GUILD_TOOLS_NAV];
+  const isTabEnabled = (tab: string) => {
+    const module = TAB_MODULE[tab];
+    return !module || data?.guild.modules[module] === true;
+  };
+  const primaryNav = PRIMARY_NAV.filter((item) => isTabEnabled(item.id));
+  const guildToolsNav = GUILD_TOOLS_NAV.filter((item) => isTabEnabled(item.id));
+  const allNavItems = [...primaryNav, ...guildToolsNav];
+  const activeTab = allNavItems.some((item) => item.id === requestedTab) ? requestedTab : 'overview';
   const activeNav = allNavItems.find((item) => item.id === activeTab) ?? PRIMARY_NAV[0];
   const displayName = guildOptions.find((guild) => guild.guildId === guildId)?.name
     ?? data?.guild.guildName
@@ -295,14 +309,14 @@ export default function App() {
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto p-3" aria-label={t('Primary navigation')}>
-          {PRIMARY_NAV.map(renderNavigationItem)}
+          {primaryNav.map(renderNavigationItem)}
           <div className={`my-3 border-t border-white/[0.08] pt-3 ${sidebarCollapsed ? 'mx-2' : ''}`}>
             {!sidebarCollapsed && (
               <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 {t('Guild tools')}
               </p>
             )}
-            <div className="space-y-1">{GUILD_TOOLS_NAV.map(renderNavigationItem)}</div>
+            <div className="space-y-1">{guildToolsNav.map(renderNavigationItem)}</div>
           </div>
         </nav>
 
@@ -388,7 +402,7 @@ export default function App() {
             <StatusPill label={apiStatus === 'checking' ? t('Checking…') : apiStatus === 'online' ? t('API is responding') : t('API health check failed')} tone={apiStatus === 'online' ? 'success' : apiStatus === 'offline' ? 'danger' : 'neutral'} />
             <StatusPill label={botLabel} tone={botTone} />
 
-            <button
+            {isTabEnabled('logging') && <button
               type="button"
               onClick={() => setActiveTab('logging')}
               className="relative rounded-xl border border-white/10 p-2 text-slate-300 transition hover:border-violet-300/25 hover:bg-violet-400/[0.08] hover:text-white"
@@ -396,7 +410,7 @@ export default function App() {
               title={t('Notifications and recent activity')}
             >
               <Bell className="h-4 w-4" aria-hidden="true" />
-            </button>
+            </button>}
 
             <label className="sr-only" htmlFor="dashboard-language">{t('Language')}</label>
             <select

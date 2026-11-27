@@ -47,7 +47,7 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 - **Tests:** join/update/leave/rejoin, missing-record recovery, pagination, idempotency, departed-member filtering.
 
 ### Phase 0.7 – Dashboard/API functional audit and repair
-- **Status:** removed the unavailable scheduler control and added distinct pending, success and failure states to the command runner. Remaining controls and module enforcement are under audit.
+- **Status:** removed the unavailable scheduler control and added distinct pending, success and failure states to the command runner. Sidebar navigation and active panels honor guild module flags. API and bot module enforcement and remaining controls are under audit.
 - [ ] Map every dashboard action to its API route, authorization capability, database mutation and bot-side effect.
 - [ ] Remove, disable or correctly implement controls that currently have no working operation.
 - [x] Remove the manual scheduler control from the dashboard. The legacy API route remains an explicit HTTP 503 for older dashboard versions.
