@@ -54,7 +54,7 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
       setSubject('');
       setInitialMessage('');
       setShowNew(false);
-      setFeedback(t('Ticket created.'));
+      setFeedback(t('Ticket saved in the dashboard.'));
     } catch (err) {
       setError(err instanceof Error ? t(err.message) : t('Ticket creation failed'));
     }

@@ -49,7 +49,7 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 ### Phase 0.7 – Dashboard/API functional audit and repair
 - **Status:** scheduler control removed. Navigation, feature API routes, commands, setup, role panels, queue actions and message handlers honor module flags. Shared role jobs carry a signed source module. Disabled community jobs stay pending; retention and temporary-grant cleanup continue. Dashboard guild snapshots are scoped to the active session and guild. Remaining controls and API contracts are under audit.
 - [x] Map dashboard actions to routes, capabilities, persistence and bot effects in [Dashboard API audit](docs/DASHBOARD_API_AUDIT.md).
-- [ ] Remove, disable or correctly implement controls that currently have no working operation.
+- [ ] Remove, disable or correctly implement controls that currently have no working operation. Onboarding buttons are disabled when onboarding is off; ticket creation is explicitly reported as a dashboard record.
 - [x] Remove the manual scheduler control from the dashboard. The legacy API route remains an explicit HTTP 503 for older dashboard versions.
 - [ ] Apply module toggles consistently to navigation, routes, commands and bot event handlers—not just save the flags.
 - [ ] Add clear loading, success, failure and offline states; never show a successful UI state for an unverified Discord operation.

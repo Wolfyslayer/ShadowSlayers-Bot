@@ -384,7 +384,7 @@ const sv: Record<string, string> = {
   'Poll created.': 'Omröstningen har skapats.',
   'Reply sent.': 'Svaret har skickats.',
   'Suggestion published.': 'Förslaget har publicerats.',
-  'Ticket created.': 'Ärendet har skapats.',
+  'Ticket saved in the dashboard.': 'Ärendet har sparats i kontrollpanelen.',
   'Ticket updated.': 'Ärendet har uppdaterats.',
   'Vote recorded.': 'Rösten har registrerats.',
   'Activate Emergency Lockdown': 'Aktivera nödlåsning',
