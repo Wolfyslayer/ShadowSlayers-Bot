@@ -887,7 +887,7 @@ export class ShadowSlayersBotClient {
   ): Promise<void> {
     const guildId = liveGuild.id;
     const guildState = await this.db.getGuild(guildId);
-    if (!guildState || !guildState.onboarding.enabled) return;
+    if (!guildState?.modules.onboarding || !guildState.onboarding.enabled) return;
 
     const isRulesChannel =
       channelName === guildState.onboarding.rulesChannelName || channelName === '📜・rules' || channelName === 'rules';
@@ -1243,8 +1243,8 @@ export class ShadowSlayersBotClient {
         }
         if (interaction.customId === 'onboarding:active_player' && liveGuild) {
           const guildState = await this.db.getGuild(guildId);
-          if (!guildState) {
-            await interaction.reply({ ephemeral: true, content: 'Guild state missing.' });
+          if (!guildState?.modules.onboarding) {
+            await interaction.reply({ ephemeral: true, content: 'Onboarding is disabled for this guild.' });
             return;
           }
           const cloned = JSON.parse(JSON.stringify(guildState)) as typeof guildState;
@@ -1341,7 +1341,7 @@ export class ShadowSlayersBotClient {
       const channelName = 'name' in message.channel && message.channel.name ? message.channel.name : 'unknown';
       const userRoles = message.member?.roles.cache.map((r) => r.name) ?? [];
 
-      const modEval = this.automod.evaluateMessage(guild.automod, {
+      const modEval = guild.modules.automod && this.automod.evaluateMessage(guild.automod, {
         userId: message.author.id,
         username: message.author.username,
         content: message.content,
@@ -1350,7 +1350,7 @@ export class ShadowSlayersBotClient {
         mentionCount: message.mentions.users.size + message.mentions.roles.size,
       });
 
-      if (modEval.triggered) {
+      if (modEval && modEval.triggered) {
         if (modEval.recommendedActions.includes('delete') && message.deletable) {
           await message.delete().catch(() => undefined);
         }
@@ -1371,7 +1371,7 @@ export class ShadowSlayersBotClient {
 
       // Deterministic custom responses (zero AI)
       const lowerContent = message.content.trim().toLowerCase();
-      const matchedRule = guild.customResponses.find((r) => {
+      const matchedRule = guild.modules.community && guild.customResponses.find((r) => {
         if (!r.enabled) return false;
         const t = r.trigger.trim().toLowerCase();
         if (!t) return false;
@@ -1384,7 +1384,7 @@ export class ShadowSlayersBotClient {
       }
 
       const member = guild.members.find((m) => m.userId === message.author.id);
-      if (member) {
+      if (guild.modules.progression && member && !member.isDeparted) {
         const xpOutcome = evaluateXpAward(member, guild.progression, message.content);
         if (xpOutcome.awarded) {
           member.xp = xpOutcome.newXp;

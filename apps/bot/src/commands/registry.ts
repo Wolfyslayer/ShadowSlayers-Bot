@@ -792,6 +792,23 @@ function normalizeChannelName(raw: string, fallbackChannel: string): string {
   return cleaned;
 }
 
+export function commandModule(command: Pick<CommandDescriptor, 'name' | 'category'>): keyof GuildState['modules'] | undefined {
+  const root = command.name.split(' ')[0];
+  if (root === 'setup' || root === 'permissions') return 'discovery';
+  if (root === 'rules' || root === 'onboarding') return 'onboarding';
+  if (root === 'custom-response') return 'community';
+  switch (command.category) {
+    case 'Roles': return 'roles';
+    case 'AutoMod': return 'automod';
+    case 'Moderation': return 'moderation';
+    case 'Community': return 'community';
+    case 'Recruitment': return 'recruitment';
+    case 'Support': return 'tickets';
+    case 'Clan': return 'clan';
+    default: return undefined;
+  }
+}
+
 export async function executeSlashCommand(
   commandName: string,
   ctx: CommandExecutionContext,
@@ -817,6 +834,10 @@ export async function executeSlashCommand(
   const guild = await ctx.db.getGuild(ctx.guildId);
   if (!guild) {
     return { ok: false, title: 'Guild Not Found', message: `Guild "${ctx.guildId}" is not initialized.` };
+  }
+  const module = commandModule(descriptor);
+  if (module && !guild.modules[module]) {
+    return { ok: false, title: 'Module Disabled', message: 'This module is disabled for this guild.' };
   }
 
   const bundle = guild.translations[ctx.locale] ?? guild.translations.en;

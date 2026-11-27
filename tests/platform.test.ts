@@ -642,6 +642,13 @@ test('Moderation execution rejects offline execution and distinguishes verified_
   const tmpFile = path.join(os.tmpdir(), `shadowslayers-mod-${Date.now()}.json`);
   const db = new LocalPersistentAdapter(tmpFile, 'shadowslayers-primary');
   await db.init();
+  const disabled = await executeSlashCommand('timeout', {
+    guildId: 'shadowslayers-primary', actorUserId: 'u-101', actorUsername: 'AldricShadow',
+    actorRank: '👑 Shadow King', locale: 'en', channelName: 'general', args: {}, db,
+  });
+  assert.equal(disabled.ok, false);
+  assert.equal(disabled.title, 'Module Disabled');
+  await db.saveGuild(createInitialGuildSeed());
 
   const offlineCmd = await executeSlashCommand('timeout', {
     guildId: 'shadowslayers-primary',
