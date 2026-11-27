@@ -15,7 +15,7 @@ export const MembersView: React.FC<MembersViewProps> = ({ guild, onUpdateMember 
   const { locale, t } = useLocale();
   const [query, setQuery] = useState('');
   const [rankFilter, setRankFilter] = useState('all');
-  const [selectedId, setSelectedId] = useState<string>(guild.members[0]?.userId || '');
+  const [selectedId, setSelectedId] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -25,11 +25,11 @@ export const MembersView: React.FC<MembersViewProps> = ({ guild, onUpdateMember 
       m.username.toLowerCase().includes(query.toLowerCase()) ||
       m.displayName.toLowerCase().includes(query.toLowerCase());
     const matchesRank = rankFilter === 'all' || m.clanRank === rankFilter;
-    return matchesQuery && matchesRank;
+    return !m.isDeparted && matchesQuery && matchesRank;
   });
 
   const selected: GuildMemberRecord | undefined =
-    guild.members.find((m) => m.userId === selectedId) ?? filtered[0];
+    filtered.find((m) => m.userId === selectedId) ?? filtered[0];
 
   const enabledLangs = guild.languages.filter((l) => l.enabled);
 

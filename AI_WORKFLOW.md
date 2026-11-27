@@ -21,6 +21,7 @@
 10. After pushing each commit, verify GitHub Actions for that exact commit. Continue automatically within the active phase only after CI is green; investigate and fix failures before proceeding.
 11. Never weaken, skip, or delete tests or security checks merely to make CI pass. Add regression coverage for every defect discovered.
 12. Report every commit before continuing. Merge a completed phase under the standing approval and start the next phase once the merge is on `main`.
+13. Consolidate manual live acceptance tests in Phase 1.5 as requested by the owner. For earlier phases, record the specific deferred scenarios before merging, require implementation and green automated checks, and report live verification as pending. Phase 1.5 must pass the consolidated live suite before release.
 
 ## 3. Data and multi-guild safety
 1. Treat every guild as an isolated tenant. Every database query, queue item, cache key, scheduled task, log and command must be scoped to a verified `guildId`.

@@ -511,6 +511,27 @@ test('FirestoreDatabaseAdapter concurrency: parallel saveGuild and updateTaskSta
   assert.equal(dueNow.some((t) => t.id === dueTaskId), false);
 });
 
+test('a stale guild write from another adapter cannot overwrite a member update', async () => {
+  const { client } = createInMemoryFirestoreClient();
+  const bot = new FirestoreDatabaseAdapter({ client, defaultGuildId: 'shared-guild' });
+  const api = new FirestoreDatabaseAdapter({ client });
+  await bot.init();
+  const old = await api.getGuild('shared-guild');
+  const current = await bot.getGuild('shared-guild');
+  assert.ok(old && current);
+  current.members = createInitialGuildSeed('shared-guild').members;
+  await bot.saveGuild(current);
+  old.guildName = 'Renamed';
+  await assert.rejects(api.saveGuild(old), { name: 'GuildWriteConflict' });
+  const reloaded = await api.getGuild('shared-guild');
+  assert.ok(reloaded);
+  reloaded.guildName = old.guildName;
+  await api.saveGuild(reloaded);
+  const saved = await bot.getGuild('shared-guild');
+  assert.equal(saved?.guildName, 'Renamed');
+  assert.deepEqual(saved?.members, current.members);
+});
+
 test('FirestoreDatabaseAdapter retries transient errors, surfaces fatal errors, and migrates v1 guild docs', async () => {
   // 1. Transient outage recovery
   const transient = createInMemoryFirestoreClient({ failTransientCount: 2 });

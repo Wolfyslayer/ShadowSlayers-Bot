@@ -12,7 +12,7 @@ import type { BotControlCommand, BotRuntimeSnapshot } from '../../shared/src/bot
 import { anonymizeGuildUserData } from '../../shared/src/guild-privacy.ts';
 import { safeIdSchema } from '../../shared/src/validation.ts';
 import { migrateDatabaseRoot } from '../../../database/schema-migrations.ts';
-import type { DatabaseAdapter } from './adapter.ts';
+import { GuildWriteConflict, type DatabaseAdapter } from './adapter.ts';
 import { CURRENT_SCHEMA_VERSION, createEmptyGuild } from './empty-guild.ts';
 
 export interface FirestoreDocSnapshotLike {
@@ -215,6 +215,7 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
         this.connected = true;
         return result;
       } catch (err) {
+        if (err instanceof GuildWriteConflict) throw err;
         lastError = err;
         if (!isTransientFirestoreError(err) || attempt === this.maxRetries) {
           this.connected = false;
@@ -280,13 +281,7 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
         const rawGuild = docSnap.data() as unknown as GuildState | undefined;
         if (!rawGuild) continue;
         if ((rawGuild.schemaVersion ?? 1) < CURRENT_SCHEMA_VERSION) {
-          const root: DatabaseRoot = {
-            schemaVersion: rawGuild.schemaVersion ?? 1,
-            adminAuth: null,
-            guilds: { [docSnap.id]: rawGuild },
-          };
-          const migrated = migrateDatabaseRoot(root);
-          const upgraded = migrated.guilds[docSnap.id];
+          const upgraded = await this.getGuild(docSnap.id);
           if (upgraded) {
             await this.saveGuild(upgraded);
           }
@@ -386,8 +381,9 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
       const subLogs = logsSnap.docs.map((d) => d.data() as unknown as AuditLogEntry);
       const subTasks = tasksSnap.docs.map((d) => d.data() as unknown as ScheduledTask);
 
-      const merged: GuildState = {
+      const merged: GuildState & { _revision: number } = {
         ...raw,
+        _revision: (raw as GuildState & { _revision?: number })._revision ?? 0,
         guildId: safeGuildId,
         logs: subLogs.length > 0 ? subLogs : (raw.logs ?? []),
         scheduledTasks: subTasks.length > 0 ? subTasks : (raw.scheduledTasks ?? []),
@@ -406,6 +402,8 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
   }
 
   async saveGuild(guild: GuildState): Promise<void> {
+    const versionedGuild = guild as GuildState & { _revision?: number };
+    const expectedRevision = versionedGuild._revision;
     const safeGuildId = assertSafeDocId(guild.guildId, 'guildId');
     const db = this.getClient();
 
@@ -414,9 +412,13 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
         const guildRef = db.collection('guilds').doc(safeGuildId);
         const taskCol = guildRef.collection('scheduledTasks');
 
-        await db.runTransaction(async (tx) => {
+        const savedRevision = await db.runTransaction(async (tx) => {
           const existingSnap = await tx.get(guildRef);
           const existingData = existingSnap.exists ? existingSnap.data() : undefined;
+          const revision = typeof existingData?._revision === 'number' ? existingData._revision : 0;
+          if (existingSnap.exists && expectedRevision !== revision) {
+            throw new GuildWriteConflict(safeGuildId);
+          }
 
           // Read existing scheduled tasks inside transaction so concurrent updateTaskStatus cannot be overwritten
           const taskRefs = (guild.scheduledTasks ?? []).map((t) => ({
@@ -453,7 +455,9 @@ export class FirestoreDatabaseAdapter implements DatabaseAdapter {
             existingData,
             !existingSnap.exists,
           );
+          return revision + 1;
         });
+        versionedGuild._revision = savedRevision;
       });
     });
   }
