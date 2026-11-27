@@ -19,14 +19,12 @@ interface CommandsViewProps {
     title: string;
     message: string;
   }>;
-  onRunSchedulerTick: () => Promise<number>;
 }
 
 export const CommandsView: React.FC<CommandsViewProps> = ({
   guild,
   commands,
   onExecuteCommand,
-  onRunSchedulerTick,
 }) => {
   const { locale, t } = useLocale();
   const [selectedCmd, setSelectedCmd] = useState(commands[0]?.name || 'help');
@@ -55,17 +53,6 @@ export const CommandsView: React.FC<CommandsViewProps> = ({
             {t('{{count}} deterministic slash commands registered. Test commands directly against the persistent guild database.', { count: commands.length })}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() =>
-            onRunSchedulerTick()
-              .then((count) => setOutput(t('Scheduler sweep completed ({{count}} due task(s) executed).', { count })))
-              .catch((err) => setError(err instanceof Error ? t(err.message) : t('Scheduler request failed')))
-          }
-          className="px-4 py-2 rounded-lg border border-slate-700 bg-[#171C28] hover:bg-[#1E2535] text-sm font-medium text-slate-200 cursor-pointer whitespace-nowrap"
-        >
-          {t('Run Scheduler Sweep')}
-        </button>
       </div>
 
       {error && <div className="p-3 rounded-lg border border-red-500/40 bg-red-950/30 text-sm text-red-200" role="alert">{error}</div>}

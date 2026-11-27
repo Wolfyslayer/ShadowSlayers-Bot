@@ -830,14 +830,6 @@ export default function App() {
                     await refreshState();
                     return res.result;
                   }}
-                  onRunSchedulerTick={async () => {
-                    const res = await apiRequest<{ executed: number }>(`/api/guild/${guildId}/scheduler/tick`, {
-                      method: 'POST',
-                      token,
-                    });
-                    await refreshState();
-                    return res.executed;
-                  }}
                 />
               )}
 

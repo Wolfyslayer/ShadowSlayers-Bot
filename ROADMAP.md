@@ -49,7 +49,7 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 ### Phase 0.7 – Dashboard/API functional audit and repair
 - [ ] Map every dashboard action to its API route, authorization capability, database mutation and bot-side effect.
 - [ ] Remove, disable or correctly implement controls that currently have no working operation.
-- [ ] Replace the manual scheduler API action (currently returns HTTP 503) with a bot-owned, authenticated queue action or remove the misleading control.
+- [x] Remove the manual scheduler control from the dashboard. The legacy API route remains an explicit HTTP 503 for older dashboard versions.
 - [ ] Apply module toggles consistently to navigation, routes, commands and bot event handlers—not just save the flags.
 - [ ] Add clear loading, success, failure and offline states; never show a successful UI state for an unverified Discord operation.
 - [ ] Reconcile documentation with actual route behavior.
