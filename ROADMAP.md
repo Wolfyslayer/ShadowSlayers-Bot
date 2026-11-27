@@ -36,13 +36,13 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 - **Tests:** empty-guild factory, no production seed imports, no default guild fallback, migration and Firestore regression tests.
 
 ### Phase 0.6 – Real Discord guild/member synchronization
-- **Status:** startup, guild availability and session resume use paginated member enumeration. Gateway snapshots and member events are serialized per guild. Firestore rejects stale guild snapshots and the bot retries synchronization from fresh data. The dashboard excludes departed profiles. Live verification remains pending.
-- [ ] Enumerate and synchronize actual members on initial guild availability, with pagination and rate-limit handling.
-- [ ] Add a `GuildMemberAdd` path that creates or updates a real member record.
-- [ ] Keep `GuildMemberUpdate` role/verification synchronization, but do not silently skip members with no database record.
-- [ ] Preserve departed-member history while excluding departed members from active member lists and active counts.
-- [ ] Reconcile missing/changed members safely after reconnects and partial gateway outages.
-- [ ] Use stable Discord user IDs as identity; do not infer membership from demo profiles or role-name-only assumptions.
+- **Status:** implemented and automatically tested. The owner reported deploying the bot. Manual live acceptance is deferred to Phase 1.5. The stale-write protection requires the matching adapter in both the bot and API.
+- [x] Enumerate and synchronize actual members on initial guild availability, with pagination and Discord REST rate-limit handling.
+- [x] Add a `GuildMemberAdd` path that creates or updates a real member record.
+- [x] Keep `GuildMemberUpdate` role/verification synchronization, but do not silently skip members with no database record.
+- [x] Preserve departed-member history while excluding departed members from the active dashboard member list and overview count.
+- [x] Reconcile missing/changed members after Discord session resume; avoid treating partial snapshots as evidence of departure.
+- [x] Use stable Discord user IDs as identity; do not infer membership from demo profiles or role-name-only assumptions.
 - **Acceptance:** member counts and lists match Discord, including joins, role changes, departures and reconnect recovery.
 - **Tests:** join/update/leave/rejoin, missing-record recovery, pagination, idempotency, departed-member filtering.
 
@@ -117,11 +117,12 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 - **Acceptance:** documented threat model, tested recovery and no known cross-guild access path.
 
 ### Phase 1.5 – Final end-to-end QA and release
+- [ ] Run deferred manual acceptance checks from earlier phases in a coordinated deployment. For Phase 0.6, compare Discord member IDs and counts with Firestore and dashboard, test join, rename and role changes, leave/rejoin without losing progress, restart and Gateway resume, and confirm a concurrent API write cannot overwrite a newer bot write.
 - [ ] Test with at least two independent test guilds with different module selections.
 - [ ] Verify fresh install, setup handoff, template preview/apply, custom commands and member lifecycle.
 - [ ] Run all CI checks and live test checklist; distinguish simulated tests from real Discord/Firestore tests.
 - [ ] Update deployment and administrator documentation.
-- [ ] Obtain explicit user approval before merging/releasing each phase.
+- [ ] Follow the standing merge approval in AI_WORKFLOW.md and obtain separate approval for production release.
 - **Acceptance:** a new guild can independently build and operate its own server experience.
 
 ## Current audit snapshot
