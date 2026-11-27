@@ -10,7 +10,6 @@ interface CommunityViewProps {
   onCreatePoll: (question: string, options: string[]) => Promise<void>;
   onVotePoll: (pollId: string, optionId: string) => Promise<void>;
   onCreateGiveaway: (prize: string, minutes: number) => Promise<void>;
-  onCreateAnnouncement: (title: string, channelName: string, content: string, minutesDelay: number) => Promise<void>;
 }
 
 export const CommunityView: React.FC<CommunityViewProps> = ({
@@ -20,7 +19,6 @@ export const CommunityView: React.FC<CommunityViewProps> = ({
   onCreatePoll,
   onVotePoll,
   onCreateGiveaway,
-  onCreateAnnouncement,
 }) => {
   const { locale, t } = useLocale();
   const [tab, setTab] = useState<'suggestions' | 'polls' | 'giveaways' | 'events'>('suggestions');
@@ -30,8 +28,6 @@ export const CommunityView: React.FC<CommunityViewProps> = ({
   const [pollOptions, setPollOptions] = useState('Option A, Option B, Option C');
   const [gwPrize, setGwPrize] = useState('');
   const [gwMinutes, setGwMinutes] = useState(60);
-  const [annTitle, setAnnTitle] = useState('');
-  const [annContent, setAnnContent] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -194,21 +190,12 @@ export const CommunityView: React.FC<CommunityViewProps> = ({
 
       {tab === 'events' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void runAction(onCreateAnnouncement(annTitle, 'announcements', annContent, 15), 'Announcement queued.')
-                .then((success) => { if (success) { setAnnTitle(''); setAnnContent(''); } });
-            }}
+          <section
             className="lg:col-span-4 rounded-xl border border-slate-800 bg-[#121620] p-6 space-y-4"
           >
             <h3 className="font-display text-lg font-semibold text-slate-100">{t('Schedule Announcement')}</h3>
-            <input value={annTitle} onChange={(e) => setAnnTitle(e.target.value)} required placeholder={t('Announcement title')} className="w-full px-3 py-2 rounded-lg bg-[#0B0D12] border border-slate-800 text-sm" />
-            <textarea rows={3} value={annContent} onChange={(e) => setAnnContent(e.target.value)} required placeholder={t('Announcement body...')} className="w-full px-3 py-2 rounded-lg bg-[#0B0D12] border border-slate-800 text-sm" />
-            <button type="submit" className="w-full py-2 px-4 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold text-sm cursor-pointer">
-              {t('Queue Announcement')}
-            </button>
-          </form>
+            <p className="text-sm text-slate-400">{t('Discord announcement delivery is unavailable.')}</p>
+          </section>
 
           <div className="lg:col-span-8 rounded-xl border border-slate-800 bg-[#121620] p-6 space-y-4">
             <h3 className="font-display text-lg font-semibold text-slate-100">{t('Events, Challenges & Birthdays')}</h3>
@@ -226,7 +213,7 @@ export const CommunityView: React.FC<CommunityViewProps> = ({
                 <div key={ann.id} className="py-3">
                   <div className="flex items-center justify-between text-sm">
                     <span className="font-medium text-slate-200">{ann.title}</span>
-                    <span className="font-mono-tabular text-xs text-slate-400">{ann.sent ? t('Sent') : t('Scheduled')}</span>
+                    <span className="font-mono-tabular text-xs text-slate-400">{t('Delivery unverified')}</span>
                   </div>
                   <p className="text-xs text-slate-400 mt-0.5">#{ann.channelName} · {new Date(ann.scheduledFor).toLocaleString(locale === 'sv' ? 'sv-SE' : 'en-US')}</p>
                 </div>

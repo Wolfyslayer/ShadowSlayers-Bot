@@ -20,7 +20,8 @@ Guild routes below are relative to `/api/guild/:guildId`. They verify Discord ac
 | Apply / review recruitment | POST `/recruitment/apply`, `/recruitment/:appId/review` | overview.view / recruitment.review | Stores application and review status |
 | Create or vote on suggestion | POST `/community/suggestions`, `/community/suggestions/:id/vote` | overview.view | Writes suggestion or vote record |
 | Create or vote on poll | POST `/community/polls`, `/community/polls/:id/vote` | community.manage / overview.view | Writes poll or vote record |
-| Create giveaway / announcement | POST `/community/giveaways`, `/community/announcements` | community.manage | Writes record and schedules eligible work; creation is not confirmation of delivery |
+| Create giveaway | POST `/community/giveaways` | community.manage | Stores the giveaway and schedules a draw. Creation does not post a Discord message |
+| Schedule Discord announcement (unavailable) | Legacy POST `/community/announcements` | community.manage | Returns 501 without writing. Existing records are marked delivery unverified in the dashboard |
 | Create or edit game, create team or raid | POST `/clan/games`, PATCH `/clan/games/:gameId`, POST `/clan/teams`, `/clan/raids` | clan.manage | Stores game, team or raid records |
 | Run command | POST `/commands/execute` | overview.view plus bot command capability | Signed queue dispatch; result depends on command and module |
 | Toggle modules / download backup | PATCH `/settings`, GET `/backup` | settings.manage | Writes module flags / exports a guild snapshot |

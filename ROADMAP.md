@@ -49,13 +49,13 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 ### Phase 0.7 – Dashboard/API functional audit and repair
 - **Status:** scheduler control removed. Navigation, feature API routes, commands, setup, role panels, queue actions and message handlers honor module flags. Shared role jobs carry a signed source module. Disabled community jobs stay pending; retention and temporary-grant cleanup continue. Dashboard guild snapshots are scoped to the active session and guild. Remaining controls and API contracts are under audit.
 - [x] Map dashboard actions to routes, capabilities, persistence and bot effects in [Dashboard API audit](docs/DASHBOARD_API_AUDIT.md).
-- [ ] Remove, disable or correctly implement controls that currently have no working operation. Onboarding buttons are disabled when onboarding is off; ticket creation is explicitly reported as a dashboard record.
+- [ ] Remove, disable or correctly implement controls that currently have no working operation. Onboarding buttons reflect module state. Ticket creation is a dashboard record. Discord announcement delivery is explicitly unavailable.
 - [x] Remove the manual scheduler control from the dashboard. The legacy API route remains an explicit HTTP 503 for older dashboard versions.
 - [ ] Apply module toggles consistently to navigation, routes, commands and bot event handlers. Overview shortcuts now use the same module policy as the sidebar.
 - [ ] Add clear loading, success, failure and offline states; never show a successful UI state for an unverified Discord operation.
 - [ ] Reconcile documentation with actual route behavior.
 - **Acceptance:** every visible control has a verified end-to-end behavior or is explicitly marked unavailable.
-- **Tests:** component/API contract tests, capability tests, bot-offline tests, integration tests.
+- **Tests:** automated dashboard guild method/path contract and critical route-declaration checks, command capability and bot-offline regression tests. These are static and local checks; live acceptance belongs to Phase 1.5.
 
 ### Phase 0.8 – Generic guild model and modular bot foundation
 - [ ] Separate generic guild settings from legacy clan-rank, language-role and ShadowSlayers-specific assumptions.

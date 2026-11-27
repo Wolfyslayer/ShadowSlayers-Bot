@@ -521,6 +521,8 @@ const sv: Record<string, string> = {
   'Rules gate awaiting publish': 'Regelsteget väntar på publicering',
   'Rules published {{date}}': 'Regler publicerades {{date}}',
   'Run Scheduler Sweep': 'Kör schemaläggarens genomgång',
+  'Discord announcement delivery is unavailable.': 'Utskick av Discord-meddelanden är inte tillgängligt.',
+  'Delivery unverified': 'Leverans ej verifierad',
   'Save AutoMod Rules': 'Spara AutoMod-regler',
   'Save Manual Translations': 'Spara manuella översättningar',
   'Save Policy': 'Spara policy',

@@ -2369,49 +2369,8 @@ async function bootstrap() {
     res.status(201).json({ event: ev });
   });
 
-  app.post('/api/guild/:guildId/community/announcements', requireAuth('community.manage', 'community'), async (req: AuthenticatedRequest, res) => {
-    const guild = await db.getGuild(req.params.guildId);
-    if (!guild) {
-      res.status(404).json({ error: 'Guild not found' });
-      return;
-    }
-    const title = String(req.body?.title || '').trim();
-    const content = String(req.body?.content || '').trim();
-    const channelName = String(req.body?.channelName || 'announcements').trim();
-    const languageCode = String(req.body?.languageCode || 'en').trim();
-    const minutesDelay = Math.max(1, Number(req.body?.minutesDelay || 15));
-    if (title.length < 2 || content.length < 3) {
-      res.status(400).json({ error: 'Title and content are required.' });
-      return;
-    }
-    const now = new Date().toISOString();
-    const scheduledFor = new Date(Date.now() + minutesDelay * 60_000).toISOString();
-    const ann = {
-      id: `ann-${Date.now()}`,
-      title,
-      channelName,
-      languageCode,
-      content,
-      scheduledFor,
-      sent: false,
-      createdBy: req.sessionUser!.username,
-    };
-    guild.scheduledAnnouncements.unshift(ann);
-    guild.scheduledTasks.push({
-      id: `task-${ann.id}`,
-      guildId: guild.guildId,
-      type: 'scheduled_announcement',
-      targetId: ann.id,
-      description: `Publish "${title}" to #${channelName}`,
-      runAt: scheduledFor,
-      status: 'pending',
-      attempts: 0,
-      lastError: null,
-      completedAt: null,
-      createdAt: now,
-    });
-    await db.saveGuild(guild);
-    res.status(201).json({ announcement: ann });
+  app.post('/api/guild/:guildId/community/announcements', requireAuth('community.manage', 'community'), (_req, res) => {
+    res.status(501).json({ error: 'Discord announcement delivery is unavailable.' });
   });
 
   // Clan & Gaming Management (game-agnostic)

@@ -148,6 +148,7 @@ export class PersistentTaskScheduler {
         }
       }
     } else if (task.type === 'scheduled_announcement') {
+      if (!this.onDispatch) throw new Error('Discord announcement delivery is unavailable.');
       const ann = guild.scheduledAnnouncements.find((a) => a.id === task.targetId);
       if (ann) ann.sent = true;
     } else if (task.type === 'log_cleanup') {

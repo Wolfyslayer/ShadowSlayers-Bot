@@ -795,14 +795,6 @@ export default function App() {
                     });
                     await refreshState();
                   }}
-                  onCreateAnnouncement={async (title, channelName, content, minutesDelay) => {
-                    await apiRequest(`/api/guild/${guildId}/community/announcements`, {
-                      method: 'POST',
-                      token,
-                      body: { title, channelName, content, minutesDelay },
-                    });
-                    await refreshState();
-                  }}
                 />
               )}
 
