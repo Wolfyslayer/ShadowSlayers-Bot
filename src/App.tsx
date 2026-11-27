@@ -494,6 +494,7 @@ export default function App() {
                   databaseAdapter={health?.databaseAdapter ?? null}
                   apiStatus={apiStatus}
                   onNavigate={setActiveTab}
+                  canNavigate={isTabEnabled}
                 />
               )}
 

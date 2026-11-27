@@ -51,7 +51,7 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 - [x] Map dashboard actions to routes, capabilities, persistence and bot effects in [Dashboard API audit](docs/DASHBOARD_API_AUDIT.md).
 - [ ] Remove, disable or correctly implement controls that currently have no working operation. Onboarding buttons are disabled when onboarding is off; ticket creation is explicitly reported as a dashboard record.
 - [x] Remove the manual scheduler control from the dashboard. The legacy API route remains an explicit HTTP 503 for older dashboard versions.
-- [ ] Apply module toggles consistently to navigation, routes, commands and bot event handlers—not just save the flags.
+- [ ] Apply module toggles consistently to navigation, routes, commands and bot event handlers. Overview shortcuts now use the same module policy as the sidebar.
 - [ ] Add clear loading, success, failure and offline states; never show a successful UI state for an unverified Discord operation.
 - [ ] Reconcile documentation with actual route behavior.
 - **Acceptance:** every visible control has a verified end-to-end behavior or is explicitly marked unavailable.
