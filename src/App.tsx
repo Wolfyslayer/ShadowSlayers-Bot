@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   Activity,
   Bell,
@@ -130,7 +130,7 @@ export default function App() {
   const [requestedTab, setActiveTab] = useState('overview');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [data, setData] = useState<GuildStateResponse | null>(null);
+  const [loaded, setData] = useState<{ token: string; result: GuildStateResponse } | null>(null);
   const [health, setHealth] = useState<ApiHealthResponse | null>(null);
   const [apiStatus, setApiStatus] = useState<ConnectionState>('checking');
   const [now, setNow] = useState(Date.now());
@@ -139,19 +139,30 @@ export default function App() {
   const [privacyMode, setPrivacyMode] = useState(false);
 
   const guildId = user?.guildId;
+  const data = loaded?.token === token && loaded?.result.guild.guildId === guildId
+    ? loaded.result : null;
+  const scope = useRef({ token, guildId, request: 0 });
+  useLayoutEffect(() => {
+    scope.current = { token, guildId, request: 0 };
+  }, [token, guildId]);
 
   const refreshState = useCallback(async () => {
     if (!token || !guildId) return;
+    const current = scope.current;
+    if (current.token !== token || current.guildId !== guildId) return;
+    const request = ++current.request;
     setLoading(true);
     setLoadError(null);
     const [stateResult, healthResult] = await Promise.allSettled([
       apiRequest<GuildStateResponse>(`/api/guild/${guildId}/state`, { token }),
       apiRequest<ApiHealthResponse>('/api/health'),
     ]);
-    if (stateResult.status === 'fulfilled') {
-      setData(stateResult.value);
+    if (scope.current !== current || current.request !== request) return;
+    if (stateResult.status === 'fulfilled' && stateResult.value.guild.guildId === guildId) {
+      setData({ token, result: stateResult.value });
     } else {
-      setLoadError(stateResult.reason instanceof Error ? stateResult.reason.message : t('Unable to load guild data'));
+      setLoadError(stateResult.status === 'rejected' && stateResult.reason instanceof Error
+        ? stateResult.reason.message : t('Unable to load guild data'));
     }
     if (healthResult.status === 'fulfilled' && healthResult.value.ok) {
       setHealth(healthResult.value);
