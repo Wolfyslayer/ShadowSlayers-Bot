@@ -58,10 +58,17 @@ export class PersistentTaskScheduler {
     let executed = 0;
 
     for (const task of dueTasks) {
-      if (this.inFlight.has(task.id)) continue;
-      this.inFlight.add(task.id);
+      const taskKey = `${task.guildId}/${task.id}`;
+      if (this.inFlight.has(taskKey)) continue;
+      this.inFlight.add(taskKey);
 
       try {
+        const guild = await this.db.getGuild(task.guildId);
+        if (!guild) continue;
+        // Expiring sanctions and grants and purging retained logs remain safety cleanup.
+        const communityTask = task.type === 'reminder' || task.type === 'giveaway_draw' ||
+          task.type === 'scheduled_announcement';
+        if (communityTask && (!guild.modules.scheduler || !guild.modules.community)) continue;
         await this.db.updateTaskStatus(task.guildId, task.id, {
           status: 'running',
           attempts: task.attempts + 1,
@@ -82,7 +89,7 @@ export class PersistentTaskScheduler {
           lastError: message,
         });
       } finally {
-        this.inFlight.delete(task.id);
+        this.inFlight.delete(taskKey);
       }
     }
 
@@ -141,6 +148,7 @@ export class PersistentTaskScheduler {
         }
       }
     } else if (task.type === 'scheduled_announcement') {
+      if (!this.onDispatch) throw new Error('Discord announcement delivery is unavailable.');
       const ann = guild.scheduledAnnouncements.find((a) => a.id === task.targetId);
       if (ann) ann.sent = true;
     } else if (task.type === 'log_cleanup') {

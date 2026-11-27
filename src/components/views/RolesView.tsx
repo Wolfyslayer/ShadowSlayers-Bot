@@ -87,6 +87,7 @@ export const RolesView: React.FC<RolesViewProps> = ({
         <div className="flex flex-wrap items-center gap-2 shrink-0">
           <button
             type="button"
+            disabled={!guild.modules.onboarding}
             onClick={() => {
               setError(null);
               setFeedback(null);
@@ -255,6 +256,7 @@ export const RolesView: React.FC<RolesViewProps> = ({
                     <td className="py-2 text-right space-x-2 whitespace-nowrap">
                       <button
                         type="button"
+                        disabled={!guild.modules.onboarding}
                         onClick={() =>
                           onVerifyRules(m.userId, !m.verified)
                             .then(() => setFeedback(t('Updated rules verification for {{username}}.', { username: m.username })))
@@ -267,7 +269,7 @@ export const RolesView: React.FC<RolesViewProps> = ({
                       {!hasRank && (
                         <button
                           type="button"
-                          disabled={!readyForStep5}
+                          disabled={!guild.modules.onboarding || !readyForStep5}
                           onClick={() =>
                             onGrantActivePlayer(m.userId)
                               .then(() => setFeedback(t('Granted 🌱 Recruit to {{username}}.', { username: m.username })))

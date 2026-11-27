@@ -160,6 +160,19 @@ export class ShadowSlayersBotClient {
       throw new Error(`Discord Gateway is not connected to guild ${command.guildId}.`);
     }
 
+    const operationModules = {
+      'guild.rescan': 'discovery',
+      'guild.setup': 'discovery',
+      'language.createChannels': 'multilingual',
+      'rolePanel.publish': 'roles',
+      'rules.publish': 'onboarding',
+      'moderation.execute': 'moderation',
+    } as const;
+    const module = operationModules[command.operation as keyof typeof operationModules];
+    if (module && !(await this.db.getGuild(command.guildId))?.modules[module]) {
+      throw new Error('This module is disabled for this guild.');
+    }
+
     switch (command.operation) {
       case 'guild.rescan': {
         const snapshot = await this.rescanLiveGuild(command.payload.snapshot, command.guildId);
@@ -177,6 +190,11 @@ export class ShadowSlayersBotClient {
       case 'language.createChannels':
         return this.createLanguageChannelsOnDiscord(liveGuild, command.payload);
       case 'member.applyRoleChanges': {
+        const { sourceModule } = command.payload;
+        if ((sourceModule !== 'clan' && sourceModule !== 'onboarding') ||
+            !(await this.db.getGuild(command.guildId))?.modules[sourceModule]) {
+          throw new Error('This member role operation requires an enabled source module.');
+        }
         for (const change of command.payload.changes) {
           const result = change.action === 'grant'
             ? await this.grantRoleOnDiscord(liveGuild, command.payload.userId, change.roleName, change.reason)
@@ -754,6 +772,7 @@ export class ShadowSlayersBotClient {
     const [, panelId, itemRoleKey] = customId.split(':');
     const guildState = await this.db.getGuild(liveGuild.id);
     if (!guildState) return { ok: false, message: 'Guild configuration missing.' };
+    if (!guildState.modules.roles) return { ok: false, message: 'Role panels are disabled for this guild.' };
 
     const panel = guildState.rolePanels.find((p) => p.id === panelId);
     if (!panel) return { ok: false, message: 'Role panel not found.' };
@@ -887,7 +906,7 @@ export class ShadowSlayersBotClient {
   ): Promise<void> {
     const guildId = liveGuild.id;
     const guildState = await this.db.getGuild(guildId);
-    if (!guildState || !guildState.onboarding.enabled) return;
+    if (!guildState?.modules.onboarding || !guildState.onboarding.enabled) return;
 
     const isRulesChannel =
       channelName === guildState.onboarding.rulesChannelName || channelName === '📜・rules' || channelName === 'rules';
@@ -1231,6 +1250,10 @@ export class ShadowSlayersBotClient {
 
       if (interaction.isButton()) {
         if (interaction.customId.startsWith('setup:') && liveGuild) {
+          if (!(await this.db.getGuild(guildId))?.modules.discovery) {
+            await interaction.reply({ ephemeral: true, content: 'Server discovery is disabled for this guild.' });
+            return;
+          }
           await dispatchLiveSetupButton(interaction, {
             guildId,
             actorUserId: interaction.user.id,
@@ -1243,8 +1266,8 @@ export class ShadowSlayersBotClient {
         }
         if (interaction.customId === 'onboarding:active_player' && liveGuild) {
           const guildState = await this.db.getGuild(guildId);
-          if (!guildState) {
-            await interaction.reply({ ephemeral: true, content: 'Guild state missing.' });
+          if (!guildState?.modules.onboarding) {
+            await interaction.reply({ ephemeral: true, content: 'Onboarding is disabled for this guild.' });
             return;
           }
           const cloned = JSON.parse(JSON.stringify(guildState)) as typeof guildState;
@@ -1286,6 +1309,10 @@ export class ShadowSlayersBotClient {
       if (!interaction.isChatInputCommand()) return;
 
       if (interaction.commandName === 'setup' && liveGuild) {
+        if (!(await this.db.getGuild(guildId))?.modules.discovery) {
+          await interaction.reply({ ephemeral: true, content: 'Server discovery is disabled for this guild.' });
+          return;
+        }
         await handleLiveSlashSetup(interaction, {
           guildId,
           actorUserId: interaction.user.id,
@@ -1341,7 +1368,7 @@ export class ShadowSlayersBotClient {
       const channelName = 'name' in message.channel && message.channel.name ? message.channel.name : 'unknown';
       const userRoles = message.member?.roles.cache.map((r) => r.name) ?? [];
 
-      const modEval = this.automod.evaluateMessage(guild.automod, {
+      const modEval = guild.modules.automod && this.automod.evaluateMessage(guild.automod, {
         userId: message.author.id,
         username: message.author.username,
         content: message.content,
@@ -1350,7 +1377,7 @@ export class ShadowSlayersBotClient {
         mentionCount: message.mentions.users.size + message.mentions.roles.size,
       });
 
-      if (modEval.triggered) {
+      if (modEval && modEval.triggered) {
         if (modEval.recommendedActions.includes('delete') && message.deletable) {
           await message.delete().catch(() => undefined);
         }
@@ -1371,7 +1398,7 @@ export class ShadowSlayersBotClient {
 
       // Deterministic custom responses (zero AI)
       const lowerContent = message.content.trim().toLowerCase();
-      const matchedRule = guild.customResponses.find((r) => {
+      const matchedRule = guild.modules.community && guild.customResponses.find((r) => {
         if (!r.enabled) return false;
         const t = r.trigger.trim().toLowerCase();
         if (!t) return false;
@@ -1384,7 +1411,7 @@ export class ShadowSlayersBotClient {
       }
 
       const member = guild.members.find((m) => m.userId === message.author.id);
-      if (member) {
+      if (guild.modules.progression && member && !member.isDeparted) {
         const xpOutcome = evaluateXpAward(member, guild.progression, message.content);
         if (xpOutcome.awarded) {
           member.xp = xpOutcome.newXp;

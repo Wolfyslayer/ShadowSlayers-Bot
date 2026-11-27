@@ -24,6 +24,7 @@ export interface BotControlPayloadMap {
     actorUsername: string;
   };
   'member.applyRoleChanges': {
+    sourceModule: 'clan' | 'onboarding';
     userId: string;
     changes: Array<{ action: 'grant' | 'remove'; roleName: string; reason: string }>;
   };

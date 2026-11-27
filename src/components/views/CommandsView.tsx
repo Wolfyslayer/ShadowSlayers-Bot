@@ -19,30 +19,35 @@ interface CommandsViewProps {
     title: string;
     message: string;
   }>;
-  onRunSchedulerTick: () => Promise<number>;
 }
 
 export const CommandsView: React.FC<CommandsViewProps> = ({
   guild,
   commands,
   onExecuteCommand,
-  onRunSchedulerTick,
 }) => {
   const { locale, t } = useLocale();
   const [selectedCmd, setSelectedCmd] = useState(commands[0]?.name || 'help');
   const [argsJson, setArgsJson] = useState('{}');
   const [output, setOutput] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
 
   const handleRun = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (running || !commands.some((command) => command.name === selectedCmd)) return;
     setError(null);
+    setOutput(null);
+    setRunning(true);
     try {
       const parsedArgs = JSON.parse(argsJson || '{}') as Record<string, string>;
       const res = await onExecuteCommand(selectedCmd, parsedArgs);
-      setOutput(`[${res.ok ? 'OK' : 'DENIED'}] ${res.title}: ${res.message}`);
+      if (res.ok) setOutput(`${res.title}: ${res.message}`);
+      else setError(`${res.title}: ${res.message}`);
     } catch (err) {
       setError(err instanceof Error ? t(err.message) : t('Invalid JSON arguments or execution failed'));
+    } finally {
+      setRunning(false);
     }
   };
 
@@ -55,23 +60,12 @@ export const CommandsView: React.FC<CommandsViewProps> = ({
             {t('{{count}} deterministic slash commands registered. Test commands directly against the persistent guild database.', { count: commands.length })}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() =>
-            onRunSchedulerTick()
-              .then((count) => setOutput(t('Scheduler sweep completed ({{count}} due task(s) executed).', { count })))
-              .catch((err) => setError(err instanceof Error ? t(err.message) : t('Scheduler request failed')))
-          }
-          className="px-4 py-2 rounded-lg border border-slate-700 bg-[#171C28] hover:bg-[#1E2535] text-sm font-medium text-slate-200 cursor-pointer whitespace-nowrap"
-        >
-          {t('Run Scheduler Sweep')}
-        </button>
       </div>
 
       {error && <div className="p-3 rounded-lg border border-red-500/40 bg-red-950/30 text-sm text-red-200" role="alert">{error}</div>}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <form onSubmit={handleRun} className="lg:col-span-5 rounded-xl border border-slate-800 bg-[#121620] p-6 space-y-4">
+        <form onSubmit={handleRun} aria-busy={running} className="lg:col-span-5 rounded-xl border border-slate-800 bg-[#121620] p-6 space-y-4">
           <div className="flex items-center gap-2 text-amber-400 text-xs font-medium">
             <Terminal className="w-4 h-4" />
             <span>{t('Interactive Slash Command Runner')}</span>
@@ -101,13 +95,14 @@ export const CommandsView: React.FC<CommandsViewProps> = ({
           </div>
           <button
             type="submit"
+            disabled={running || !commands.some((command) => command.name === selectedCmd)}
             className="w-full py-2 px-4 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold text-sm flex items-center justify-center gap-2 cursor-pointer"
           >
             <Play className="w-4 h-4" />
             <span>{t('Execute')} /{selectedCmd}</span>
           </button>
           {output && (
-            <div className="p-3 rounded-lg bg-[#0B0D12] border border-slate-800 text-xs font-mono-tabular text-amber-300">
+            <div role="status" className="p-3 rounded-lg bg-[#0B0D12] border border-slate-800 text-xs font-mono-tabular text-amber-300">
               {output}
             </div>
           )}

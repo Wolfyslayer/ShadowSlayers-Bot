@@ -34,6 +34,7 @@ interface OverviewViewProps {
   databaseAdapter: string | null;
   apiStatus: ConnectionState;
   onNavigate: (tab: string) => void;
+  canNavigate: (tab: string) => boolean;
 }
 
 function formatUptime(startedAt: string | null, now: number): string | null {
@@ -73,6 +74,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   databaseAdapter,
   apiStatus,
   onNavigate,
+  canNavigate,
 }) => {
   const { locale, t } = useLocale();
   const [now, setNow] = useState(Date.now());
@@ -141,15 +143,15 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
-            <button type="button" className="ss-button-primary" onClick={() => onNavigate('discovery')}>
+            {canNavigate('discovery') && <button type="button" className="ss-button-primary" onClick={() => onNavigate('discovery')}>
               <ShieldCheck className="h-4 w-4" aria-hidden="true" />
               {t('Open server management')}
               <ArrowUpRight className="h-4 w-4 opacity-70" aria-hidden="true" />
-            </button>
-            <button type="button" className="ss-button-secondary" onClick={() => onNavigate('languages')}>
+            </button>}
+            {canNavigate('languages') && <button type="button" className="ss-button-secondary" onClick={() => onNavigate('languages')}>
               <Globe className="h-4 w-4" aria-hidden="true" />
               {t('Open language settings')}
-            </button>
+            </button>}
           </div>
         </div>
       </section>
@@ -192,10 +194,10 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               <h2 className="font-display text-lg font-semibold text-white">{t('Audit activity, last 7 days')}</h2>
               <p className="mt-1 text-xs text-slate-400">{t('Activity shown is based on retained audit entries.')}</p>
             </div>
-            <button type="button" className="ss-button-quiet" onClick={() => onNavigate('logging')}>
+            {canNavigate('logging') && <button type="button" className="ss-button-quiet" onClick={() => onNavigate('logging')}>
               {t('View all activity')}
               <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
-            </button>
+            </button>}
           </div>
           {guild.logs.length === 0 ? (
             <EmptyState
@@ -242,7 +244,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               { label: 'Manage roles', tab: 'roles', icon: ShieldCheck },
               { label: 'Review tickets', tab: 'tickets', icon: CircleHelp },
               { label: 'Review moderation', tab: 'moderation', icon: Activity },
-            ].map((action) => {
+            ].filter((action) => canNavigate(action.tab)).map((action) => {
               const Icon = action.icon;
               return (
                 <button
@@ -270,10 +272,10 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               <h2 className="font-display text-lg font-semibold text-white">{t('Recent audit activity')}</h2>
               <p className="mt-1 text-xs text-slate-400">{t('Recent audit entries')}</p>
             </div>
-            <button type="button" className="ss-button-quiet" onClick={() => onNavigate('logging')}>
+            {canNavigate('logging') && <button type="button" className="ss-button-quiet" onClick={() => onNavigate('logging')}>
               {t('View logs')}
               <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
-            </button>
+            </button>}
           </div>
           {guild.logs.length === 0 ? (
             <EmptyState title={t('No recent activity')} description={t('No audit activity has been recorded yet.')} />

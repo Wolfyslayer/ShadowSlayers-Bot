@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   Activity,
   Bell,
@@ -87,6 +87,13 @@ const GUILD_TOOLS_NAV = [
   { id: 'commands', label: 'Commands', icon: Terminal },
 ];
 
+const TAB_MODULE: Partial<Record<string, keyof GuildModulesConfig>> = {
+  discovery: 'discovery', channels: 'discovery', roles: 'roles',
+  tickets: 'tickets', support: 'tickets', moderation: 'moderation', automod: 'automod',
+  statistics: 'progression', logging: 'logging', languages: 'multilingual',
+  recruitment: 'recruitment', community: 'community', clan: 'clan',
+};
+
 type ConnectionState = 'checking' | 'online' | 'offline';
 
 interface ApiHealthResponse {
@@ -120,10 +127,10 @@ export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUserSession | null>(null);
   const [guildOptions, setGuildOptions] = useState<GuildOption[]>([]);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [requestedTab, setActiveTab] = useState('overview');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [data, setData] = useState<GuildStateResponse | null>(null);
+  const [loaded, setData] = useState<{ token: string; result: GuildStateResponse } | null>(null);
   const [health, setHealth] = useState<ApiHealthResponse | null>(null);
   const [apiStatus, setApiStatus] = useState<ConnectionState>('checking');
   const [now, setNow] = useState(Date.now());
@@ -132,19 +139,30 @@ export default function App() {
   const [privacyMode, setPrivacyMode] = useState(false);
 
   const guildId = user?.guildId;
+  const data = loaded?.token === token && loaded?.result.guild.guildId === guildId
+    ? loaded.result : null;
+  const scope = useRef({ token, guildId, request: 0 });
+  useLayoutEffect(() => {
+    scope.current = { token, guildId, request: 0 };
+  }, [token, guildId]);
 
   const refreshState = useCallback(async () => {
     if (!token || !guildId) return;
+    const current = scope.current;
+    if (current.token !== token || current.guildId !== guildId) return;
+    const request = ++current.request;
     setLoading(true);
     setLoadError(null);
     const [stateResult, healthResult] = await Promise.allSettled([
       apiRequest<GuildStateResponse>(`/api/guild/${guildId}/state`, { token }),
       apiRequest<ApiHealthResponse>('/api/health'),
     ]);
-    if (stateResult.status === 'fulfilled') {
-      setData(stateResult.value);
+    if (scope.current !== current || current.request !== request) return;
+    if (stateResult.status === 'fulfilled' && stateResult.value.guild.guildId === guildId) {
+      setData({ token, result: stateResult.value });
     } else {
-      setLoadError(stateResult.reason instanceof Error ? stateResult.reason.message : t('Unable to load guild data'));
+      setLoadError(stateResult.status === 'rejected' && stateResult.reason instanceof Error
+        ? stateResult.reason.message : t('Unable to load guild data'));
     }
     if (healthResult.status === 'fulfilled' && healthResult.value.ok) {
       setHealth(healthResult.value);
@@ -205,7 +223,14 @@ export default function App() {
     );
   }
 
-  const allNavItems = [...PRIMARY_NAV, ...GUILD_TOOLS_NAV];
+  const isTabEnabled = (tab: string) => {
+    const module = TAB_MODULE[tab];
+    return !module || data?.guild.modules[module] === true;
+  };
+  const primaryNav = PRIMARY_NAV.filter((item) => isTabEnabled(item.id));
+  const guildToolsNav = GUILD_TOOLS_NAV.filter((item) => isTabEnabled(item.id));
+  const allNavItems = [...primaryNav, ...guildToolsNav];
+  const activeTab = allNavItems.some((item) => item.id === requestedTab) ? requestedTab : 'overview';
   const activeNav = allNavItems.find((item) => item.id === activeTab) ?? PRIMARY_NAV[0];
   const displayName = guildOptions.find((guild) => guild.guildId === guildId)?.name
     ?? data?.guild.guildName
@@ -295,14 +320,14 @@ export default function App() {
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto p-3" aria-label={t('Primary navigation')}>
-          {PRIMARY_NAV.map(renderNavigationItem)}
+          {primaryNav.map(renderNavigationItem)}
           <div className={`my-3 border-t border-white/[0.08] pt-3 ${sidebarCollapsed ? 'mx-2' : ''}`}>
             {!sidebarCollapsed && (
               <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 {t('Guild tools')}
               </p>
             )}
-            <div className="space-y-1">{GUILD_TOOLS_NAV.map(renderNavigationItem)}</div>
+            <div className="space-y-1">{guildToolsNav.map(renderNavigationItem)}</div>
           </div>
         </nav>
 
@@ -388,7 +413,7 @@ export default function App() {
             <StatusPill label={apiStatus === 'checking' ? t('Checking…') : apiStatus === 'online' ? t('API is responding') : t('API health check failed')} tone={apiStatus === 'online' ? 'success' : apiStatus === 'offline' ? 'danger' : 'neutral'} />
             <StatusPill label={botLabel} tone={botTone} />
 
-            <button
+            {isTabEnabled('logging') && <button
               type="button"
               onClick={() => setActiveTab('logging')}
               className="relative rounded-xl border border-white/10 p-2 text-slate-300 transition hover:border-violet-300/25 hover:bg-violet-400/[0.08] hover:text-white"
@@ -396,7 +421,7 @@ export default function App() {
               title={t('Notifications and recent activity')}
             >
               <Bell className="h-4 w-4" aria-hidden="true" />
-            </button>
+            </button>}
 
             <label className="sr-only" htmlFor="dashboard-language">{t('Language')}</label>
             <select
@@ -469,6 +494,7 @@ export default function App() {
                   databaseAdapter={health?.databaseAdapter ?? null}
                   apiStatus={apiStatus}
                   onNavigate={setActiveTab}
+                  canNavigate={isTabEnabled}
                 />
               )}
 
@@ -769,14 +795,6 @@ export default function App() {
                     });
                     await refreshState();
                   }}
-                  onCreateAnnouncement={async (title, channelName, content, minutesDelay) => {
-                    await apiRequest(`/api/guild/${guildId}/community/announcements`, {
-                      method: 'POST',
-                      token,
-                      body: { title, channelName, content, minutesDelay },
-                    });
-                    await refreshState();
-                  }}
                 />
               )}
 
@@ -829,14 +847,6 @@ export default function App() {
                     );
                     await refreshState();
                     return res.result;
-                  }}
-                  onRunSchedulerTick={async () => {
-                    const res = await apiRequest<{ executed: number }>(`/api/guild/${guildId}/scheduler/tick`, {
-                      method: 'POST',
-                      token,
-                    });
-                    await refreshState();
-                    return res.executed;
                   }}
                 />
               )}
