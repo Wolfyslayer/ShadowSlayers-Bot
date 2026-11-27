@@ -47,7 +47,7 @@ Status is based on repository inspection, not assumptions from UI labels. “Exi
 - **Tests:** join/update/leave/rejoin, missing-record recovery, pagination, idempotency, departed-member filtering.
 
 ### Phase 0.7 – Dashboard/API functional audit and repair
-- **Status:** scheduler control removed. Navigation, feature-specific API routes, the command runner, live setup, role-panel buttons, feature-specific queue actions and common message handlers honor module flags. Shared member-role operations, scheduled feature execution and remaining controls are under audit.
+- **Status:** scheduler control removed. Navigation, feature API routes, commands, setup, role panels, queue actions and message handlers honor module flags. Shared role jobs carry a signed source module. Disabled community jobs stay pending; retention and temporary-grant cleanup continue. Remaining dashboard controls and API contracts are under audit.
 - [ ] Map every dashboard action to its API route, authorization capability, database mutation and bot-side effect.
 - [ ] Remove, disable or correctly implement controls that currently have no working operation.
 - [x] Remove the manual scheduler control from the dashboard. The legacy API route remains an explicit HTTP 503 for older dashboard versions.

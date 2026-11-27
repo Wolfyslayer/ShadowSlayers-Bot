@@ -1297,6 +1297,10 @@ async function bootstrap() {
     }
 
     if (parsed.data.clanRank && parsed.data.clanRank !== member.clanRank) {
+      if (!guild.modules.clan) {
+        res.status(403).json({ error: 'This module is disabled for this guild.' });
+        return;
+      }
       if (!canAssignClanRank(req.sessionUser!.clanRank, parsed.data.clanRank)) {
         res.status(403).json({ error: `Your rank (${req.sessionUser!.clanRank ?? 'Unranked'}) cannot assign ${parsed.data.clanRank}.` });
         return;
@@ -1320,7 +1324,7 @@ async function bootstrap() {
         guild.guildId,
         req.sessionUser!,
         'member.applyRoleChanges',
-        { userId: member.userId, changes },
+        { userId: member.userId, sourceModule: 'clan', changes },
       );
       if (!command.ok) {
         res.status(command.status).json({ error: command.error });
@@ -1550,6 +1554,7 @@ async function bootstrap() {
       'member.applyRoleChanges',
       {
         userId: member.userId,
+        sourceModule: 'onboarding',
         changes: [{
           action: added ? 'grant' : 'remove',
           roleName,
@@ -1624,6 +1629,7 @@ async function bootstrap() {
         'member.applyRoleChanges',
         {
           userId: member.userId,
+          sourceModule: 'onboarding',
           changes: [{
             action: 'grant',
             roleName: result.grantedRole,

@@ -871,6 +871,14 @@ test('Persistent scheduler executes due tasks idempotently without double runs',
   await db.saveGuild(guild);
 
   const scheduler = new PersistentTaskScheduler(db);
+  assert.equal(await scheduler.tick(), 0);
+  const paused = await db.getGuild(guild.guildId);
+  assert.ok(paused);
+  assert.equal(paused.scheduledTasks[0].status, 'pending');
+  assert.equal(paused.scheduledTasks[0].attempts, 0);
+  paused.modules.community = true;
+  paused.modules.scheduler = true;
+  await db.saveGuild(paused);
   const firstRun = await scheduler.tick();
   const secondRun = await scheduler.tick();
   assert.equal(firstRun, 1);

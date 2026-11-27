@@ -190,6 +190,11 @@ export class ShadowSlayersBotClient {
       case 'language.createChannels':
         return this.createLanguageChannelsOnDiscord(liveGuild, command.payload);
       case 'member.applyRoleChanges': {
+        const { sourceModule } = command.payload;
+        if ((sourceModule !== 'clan' && sourceModule !== 'onboarding') ||
+            !(await this.db.getGuild(command.guildId))?.modules[sourceModule]) {
+          throw new Error('This member role operation requires an enabled source module.');
+        }
         for (const change of command.payload.changes) {
           const result = change.action === 'grant'
             ? await this.grantRoleOnDiscord(liveGuild, command.payload.userId, change.roleName, change.reason)
