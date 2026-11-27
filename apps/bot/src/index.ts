@@ -160,6 +160,19 @@ export class ShadowSlayersBotClient {
       throw new Error(`Discord Gateway is not connected to guild ${command.guildId}.`);
     }
 
+    const operationModules = {
+      'guild.rescan': 'discovery',
+      'guild.setup': 'discovery',
+      'language.createChannels': 'multilingual',
+      'rolePanel.publish': 'roles',
+      'rules.publish': 'onboarding',
+      'moderation.execute': 'moderation',
+    } as const;
+    const module = operationModules[command.operation as keyof typeof operationModules];
+    if (module && !(await this.db.getGuild(command.guildId))?.modules[module]) {
+      throw new Error('This module is disabled for this guild.');
+    }
+
     switch (command.operation) {
       case 'guild.rescan': {
         const snapshot = await this.rescanLiveGuild(command.payload.snapshot, command.guildId);
@@ -754,6 +767,7 @@ export class ShadowSlayersBotClient {
     const [, panelId, itemRoleKey] = customId.split(':');
     const guildState = await this.db.getGuild(liveGuild.id);
     if (!guildState) return { ok: false, message: 'Guild configuration missing.' };
+    if (!guildState.modules.roles) return { ok: false, message: 'Role panels are disabled for this guild.' };
 
     const panel = guildState.rolePanels.find((p) => p.id === panelId);
     if (!panel) return { ok: false, message: 'Role panel not found.' };
@@ -1231,6 +1245,10 @@ export class ShadowSlayersBotClient {
 
       if (interaction.isButton()) {
         if (interaction.customId.startsWith('setup:') && liveGuild) {
+          if (!(await this.db.getGuild(guildId))?.modules.discovery) {
+            await interaction.reply({ ephemeral: true, content: 'Server discovery is disabled for this guild.' });
+            return;
+          }
           await dispatchLiveSetupButton(interaction, {
             guildId,
             actorUserId: interaction.user.id,
@@ -1286,6 +1304,10 @@ export class ShadowSlayersBotClient {
       if (!interaction.isChatInputCommand()) return;
 
       if (interaction.commandName === 'setup' && liveGuild) {
+        if (!(await this.db.getGuild(guildId))?.modules.discovery) {
+          await interaction.reply({ ephemeral: true, content: 'Server discovery is disabled for this guild.' });
+          return;
+        }
         await handleLiveSlashSetup(interaction, {
           guildId,
           actorUserId: interaction.user.id,
